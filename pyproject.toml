@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dingus-dg"
+version = "0.0.1"
+description = "DINGUS — Discontinuous Isoparametric/Nodal Galerkin Unsteady Solver (Python, DG spectral element CFD)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "numpy",
+  "scipy",
+  "numba",
+  "pydantic>=2",
+  "pyyaml",
+  "meshio",
+  "rich",
+  "typer[all]",
+  "matplotlib"
+]
+
+[project.scripts]
+dingus = "dingus.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 100
+
+[tool.ruff]
+line-length = 100
+select = ["E","F","I","B","UP"]
+
+[tool.isort]
+profile = "black"
