@@ -8,16 +8,40 @@ version = "0.0.1"
 description = "DINGUS — Discontinuous Isoparametric/Nodal Galerkin Unsteady Solver (Python, DG spectral element CFD)"
 readme = "README.md"
 requires-python = ">=3.12"
+
+# Runtime deps only (what your solver needs to run)
 dependencies = [
-  "numpy",
-  "scipy",
-  "numba",
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "numba>=0.59", # JIT kernels
   "pydantic>=2",
   "pyyaml",
   "meshio",
   "rich",
   "typer[all]",
-  "matplotlib"
+]
+
+# Optional extras you install like: pip install -e ".[dev,viz,mpi]"
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "pytest-cov",
+  "black",
+  "ruff",
+  "isort",
+  "pre-commit",
+  "mypy",
+  "types-PyYAML",
+]
+viz = [
+  "matplotlib",
+  # "pyvista",      # add later if you want interactive viz
+]
+mpi = ["mpi4py"]
+io = ["h5py"]
+profiling = [
+  "scalene",
+  # "line-profiler"
 ]
 
 [project.scripts]
@@ -31,7 +55,7 @@ line-length = 100
 
 [tool.ruff]
 line-length = 100
-select = ["E","F","I","B","UP"]
+select = ["E", "F", "I", "B", "UP"]
 
 [tool.isort]
 profile = "black"
