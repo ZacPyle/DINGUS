@@ -6,7 +6,7 @@ import numpy as np
 import meshio
 
 # List of cell types for 1D, 2D, and 3D meshes in order of preference
-CELL_TYPES = ["line", "triangle", "quad", "tetra", "hexahedron"]
+CELL_TYPES = ["line", "line3", "triangle", "quad", "quad9", "tetra", "hexahedron"]
 
 def read_gmsh(path: str) -> Dict[str, Any]:
     """Read a gmsh file (.msh) and return a general mesh dictionary."""
@@ -17,7 +17,14 @@ def read_gmsh(path: str) -> Dict[str, Any]:
     pts   = mesh.points     # (N_pts, 3) array of point coordinates
 
     # dictionary of cell blocks by type (e.g., 'vertex', 'line', 'triangle', etc.)
-    cell_blocks = {c.type: c.data for c in mesh.cells}   
+    #cell_blocks = {c.type: c.data for c in mesh.cells}   
+
+    cell_blocks = {}
+    for c in mesh.cells:
+        if c.type not in cell_blocks.keys():
+            cell_blocks[c.type] = c.data
+        else:
+            cell_blocks[c.type] = np.concatenate( (cell_blocks[c.type], c.data), axis=0 )
     
     # physical tags: meshio exposes gmsh physical groups in cell_data_dict
     phys_tags   = mesh.cell_data_dict.get("gmsh:physical", {}) if hasattr(mesh, "cell_data_dict") else {}
@@ -35,8 +42,7 @@ def read_gmsh(path: str) -> Dict[str, Any]:
             elements_by_block[t] = block
 
             # mark first found as primary
-            if primary_cell_type is None:
-                primary_cell_type = t
+            primary_cell_type = t
                 
             # physical tags for this block (may be None)
             phys_block = None
@@ -59,21 +65,21 @@ def read_gmsh(path: str) -> Dict[str, Any]:
                     "physical_tag": tag,
                 })
 
-    # If no preferred block found, include all mesh.cells raw
-    if not elements_list:
-        # fallback: include every cell block in the returned structure
-        for c in mesh.cells:
-            block_type = c.type
-            block = np.asarray(c.data, dtype=int)
-            elements_by_block[block_type] = block
-            for local_idx, conn in enumerate(block):
-                elements_list.append({
-                    "type": block_type,
-                    "nodes": np.asarray(conn, dtype=int),
-                    "cell_block": block_type,
-                    "local_index": int(local_idx),
-                    "physical_tag": None,
-                })
+    # # If no preferred block found, include all mesh.cells raw
+    # if not elements_list:
+    #     # fallback: include every cell block in the returned structure
+    #     for c in mesh.cells:
+    #         block_type = c.type
+    #         block = np.asarray(c.data, dtype=int)
+    #         elements_by_block[block_type] = block
+    #         for local_idx, conn in enumerate(block):
+    #             elements_list.append({
+    #                 "type": block_type,
+    #                 "nodes": np.asarray(conn, dtype=int),
+    #                 "cell_block": block_type,
+    #                 "local_index": int(local_idx),
+    #                 "physical_tag": None,
+    #             })
 
     return {
         "points": pts,

@@ -4,7 +4,7 @@ from typing import Dict, Any, Optional
 import numpy as np
 import matplotlib.pyplot as plt
 
-def plot_mesh(mesh: Dict[str, Any], ax: Optional[plt.Axes] = None, show: bool = True):
+def plot_mesh(mesh: Dict[str, Any], ax: Optional[plt.Axes] = None, show: bool = True, edge_color="k", node_color="r", lw=1.0, ms=3.0):
     """
     Visualize a mesh from the standardized dict returned by read_mesh().
 
@@ -26,10 +26,10 @@ def plot_mesh(mesh: Dict[str, Any], ax: Optional[plt.Axes] = None, show: bool = 
 
         # draw each segment
         for (i, j) in conn:
-            ax.plot([xy[i, 0], xy[j, 0]], [xy[i, 1], xy[j, 1]], "-")
+            ax.plot([xy[i, 0], xy[j, 0]], [xy[i, 1], xy[j, 1]], "-",color=edge_color, linewidth=lw)
 
         # draw nodes
-        ax.plot(xy[:, 0], xy[:, 1], "o")
+        ax.plot(xy[:, 0], xy[:, 1], "o", color=node_color, markersize=ms)
         ax.set_aspect("equal", adjustable="box")
 
         # for a pure 1D mesh, y is constant -> make it readable
@@ -57,8 +57,8 @@ def plot_mesh(mesh: Dict[str, Any], ax: Optional[plt.Axes] = None, show: bool = 
         triang = mtri.Triangulation(x, y, tri)
 
         # Plot the triangulation
-        ax.triplot(triang, linewidth=0.8)
-        ax.plot(x, y, "o", markersize=2)
+        ax.triplot(triang, color=edge_color, linewidth=lw)
+        ax.plot(x, y, "o", color=node_color, markersize=ms)
         ax.set_aspect("equal", adjustable="box")
         ax.set_title(" ")
         ax.set_xlabel("x")
@@ -76,9 +76,9 @@ def plot_mesh(mesh: Dict[str, Any], ax: Optional[plt.Axes] = None, show: bool = 
         # Plot the outline of the polynomial
         for q in quad:
             poly = np.vstack([xy[q], xy[q[0]]])  # close loop
-            ax.plot(poly[:, 0], poly[:, 1], "-", linewidth=0.8)
+            ax.plot(poly[:, 0], poly[:, 1], "-", linewidth=lw, color=edge_color)
 
-        ax.plot(xy[:, 0], xy[:, 1], "o", markersize=2)
+        ax.plot(xy[:, 0], xy[:, 1], "o", color=node_color, markersize=ms)
         ax.set_aspect("equal", adjustable="box")
         ax.set_title(" ")
         ax.set_xlabel("x")
