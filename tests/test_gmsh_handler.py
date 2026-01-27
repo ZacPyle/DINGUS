@@ -1,5 +1,5 @@
 from dingus.mesh.gmsh_handler import read_gmsh
-from dingus.mesh.general_mesh_handler import plot_mesh
+from dingus.mesh.general_mesh_handler import plot_gmesh
 from pathlib import Path
 import numpy as np
 
@@ -23,7 +23,7 @@ def test_plot_1d_line_mesh():
     m        = read_gmsh(TESTS_INPUT / "1D" / "advection.msh")
 
     # Plot the mesh
-    ax = plot_mesh(m, show=False)
+    ax = plot_gmesh(m, show=False)
     assert ax is not None
     fig = ax.figure
     fig.savefig(TESTS_OUTPUT / "1D" /"gmsh1D.png", dpi=200)
@@ -45,7 +45,7 @@ def test_plot_2d_quad_mesh():
     m        = read_gmsh(TESTS_INPUT / "2D" / "advection.msh")
 
     # Plot the mesh
-    ax = plot_mesh(m, show=False)
+    ax = plot_gmesh(m, show=False)
     assert ax is not None
     fig = ax.figure
     fig.savefig(TESTS_OUTPUT / "2D" /"gmsh2D_quad.png", dpi=200)

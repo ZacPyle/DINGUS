@@ -65,22 +65,6 @@ def read_gmsh(path: str) -> Dict[str, Any]:
                     "physical_tag": tag,
                 })
 
-    # # If no preferred block found, include all mesh.cells raw
-    # if not elements_list:
-    #     # fallback: include every cell block in the returned structure
-    #     for c in mesh.cells:
-    #         block_type = c.type
-    #         block = np.asarray(c.data, dtype=int)
-    #         elements_by_block[block_type] = block
-    #         for local_idx, conn in enumerate(block):
-    #             elements_list.append({
-    #                 "type": block_type,
-    #                 "nodes": np.asarray(conn, dtype=int),
-    #                 "cell_block": block_type,
-    #                 "local_index": int(local_idx),
-    #                 "physical_tag": None,
-    #             })
-
     return {
         "points": pts,
         "cells": {k: np.asarray(v, dtype=int) for k, v in cell_blocks.items()},

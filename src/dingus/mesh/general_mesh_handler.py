@@ -4,7 +4,7 @@ from typing import Dict, Any, Optional
 import numpy as np
 import matplotlib.pyplot as plt
 
-def plot_mesh(mesh: Dict[str, Any], ax: Optional[plt.Axes] = None, show: bool = True, edge_color="k", node_color="r", lw=1.0, ms=3.0):
+def plot_gmesh(mesh: Dict[str, Any], ax: Optional[plt.Axes] = None, show: bool = True, edge_color="k", node_color="r", lw=1.0, ms=3.0):
     """
     Visualize a mesh from the standardized dict returned by read_mesh().
 
