@@ -1,5 +1,6 @@
-import dingus.mesh.hohqmesh_handler as hoq
 from pathlib import Path
+from pprint import pprint
+import dingus.mesh.hohqmesh_handler as hoq
 import numpy as np
 
 TESTS_INPUT  = Path(__file__).resolve().parent / "testInputs" 
