@@ -1,4 +1,6 @@
+from dingus.mesh import element_class
 from dingus.mesh import mesh_class
+from dingus.mesh import mortar_class
 from pathlib import Path
 from pprint import pprint
 import numpy as np
@@ -38,7 +40,7 @@ def test_construct_elements(test_mesh : mesh_class.Mesh = my_mesh):
     """
 
     # Construct the elements if not already constructed
-    if not hasattr(test_mesh, "elements"): test_mesh.construct_elements()
+    if not hasattr(test_mesh, "elements") or len(test_mesh.elements) == 0: test_mesh.construct_elements()
 
     # Make sure the elements have been constructed
     assert hasattr(test_mesh, "elements")
@@ -54,6 +56,12 @@ def test_construct_elements(test_mesh : mesh_class.Mesh = my_mesh):
     assert all([e.node_ids.shape == (4,) for e in test_mesh.elements])       # 4 nodes per quad element
     assert all([e.node_coords.shape == (4, 3) for e in test_mesh.elements])  # 4 nodes per element, 3 coords per node
     assert all([0 not in e.node_ids for e in test_mesh.elements])            # No zero node IDs
+    assert test_mesh.elements[0 ].boundary_condition_names[0] == 'Bottom'
+    assert test_mesh.elements[4 ].boundary_condition_names[1] == 'Right'
+    assert test_mesh.elements[-1].boundary_condition_names[2] == 'Top'
+    assert test_mesh.elements[0 ].mortar_curvature[0] == 0
+    assert test_mesh.elements[4 ].mortar_curvature[1] == 0
+    assert test_mesh.elements[-1].mortar_curvature[2] == 0
 
 def test_construct_mortars(test_mesh : mesh_class.Mesh = my_mesh):
     """
@@ -62,13 +70,12 @@ def test_construct_mortars(test_mesh : mesh_class.Mesh = my_mesh):
     """
 
     # Construct the mortars if not already constructed
-    if not hasattr(test_mesh, "mortars"): test_mesh.construct_mortars()
+    if not hasattr(test_mesh, "mortars") or len(test_mesh.mortars) == 0: test_mesh.construct_mortars()
 
     # Make sure the mortars have been constructed
     assert hasattr(test_mesh, "mortars")
 
     # Test various attributes of the constructed mortars
-    #breakpoint()
     assert len(test_mesh.mortars) == test_mesh.num_mortars
     assert max([mort.id_global for mort in test_mesh.mortars]) == test_mesh.num_mortars
     assert min([mort.id_global for mort in test_mesh.mortars]) == 1
@@ -80,24 +87,44 @@ def test_construct_mortars(test_mesh : mesh_class.Mesh = my_mesh):
     assert all([mort.node_coords.shape == (2, 3) for mort in test_mesh.mortars])  # 2 nodes per mortar, 3 coords per node
     assert all([0 not in mort.node_ids for mort in test_mesh.mortars])            # No zero node IDs
 
-# def test_link_element_and_mortars(test_mesh : mesh_class.Mesh = my_mesh):
-#     """
-#     Tests the link_elements_and_mortars method of the Mesh class. This method should link
-#     Element and Mortar objects together based on the connectivity information read in from
-#     the mesh file.
-#     """
+def test_link_element_and_mortars(test_mesh : mesh_class.Mesh = my_mesh):
+    """
+    Tests the link_elements_and_mortars method of the Mesh class. This method should link
+    Element and Mortar objects together based on the connectivity information read in from
+    the mesh file.
+    """
 
-#     # Construct elements and mortars if not already constructed
-#     if not hasattr(test_mesh, "elements"):
-#         test_mesh.construct_elements()
-#     if not hasattr(test_mesh, "mortars"):
-#         test_mesh.construct_mortars()
+    # Construct elements and mortars if not already constructed
+    if not hasattr(test_mesh, "elements") or len(test_mesh.elements) == 0: test_mesh.construct_elements()
+    if not hasattr(test_mesh, "mortars")  or len(test_mesh.mortars)  == 0: test_mesh.construct_mortars()
 
-#     # Link the elements and mortars
-#     test_mesh.link_elements_and_mortars()
+    # Link the elements and mortars
+    test_mesh.link_elements_and_mortars()
 
-#     raise NotImplementedError("Element - Mortar linking not yet implemented!")
+    # Test that elements have been connected to mortars
+    for mort in test_mesh.mortars:
+        # Check that each mortar has the element connectivity attribute
+        assert hasattr(mort, "connected_elements"), f"Mortar {mort.id_global} is missing 'connected_elements' attribute!"
 
+        # Check that each connected_elements attribute is a list with AT LEAST one element object
+        assert any([isinstance(el, element_class.SpectralElement) for el in mort.connected_elements]), \
+               f"Mortar {mort.id_global} has no connected Element objects!"
+        
+    # Test that the mortars have been connected to elements
+    for el in test_mesh.elements:
+        # Check that each element has the mortar connectivity attribute
+        assert hasattr(el, "connected_mortars"), f"Element {el.id_global} is missing 'connected_mortars' attribute!"
+
+        # Check that each connected_mortars attribute is a list of mortar objects
+        assert all([isinstance(mort, mortar_class.SpectralMortar) for mort in el.connected_mortars]), \
+            f"Element {el.id_global} is missing a connected Mortar object!"
+        
+    # Test several mortars to see that the boundary conditions are properly extracted from the element objects
+    assert test_mesh.mortars[0].bc_name  == 'Bottom', f"Incorrect boundary condition assigned to mortar: {test_mesh.mortars[0].id_global}"
+    assert test_mesh.mortars[14].bc_name == 'Right' , f"Incorrect boundary condition assigned to mortar: {test_mesh.mortars[15].id_global}"
+    assert test_mesh.mortars[59].bc_name == 'Top'   , f"Incorrect boundary condition assigned to mortar: {test_mesh.mortars[0].id_global}"
+    
+        
 # def test_apply_mortar_curvature(test_mesh : mesh_class.Mesh = my_mesh):
 #     """
 #     Tests the apply_mortar_curvature method of the Mesh class. 

@@ -1,9 +1,10 @@
 # src/dingus/mesh/mortar_class.py
 
-from pathlib import Path
-from typing import Dict, Any, Union
-from itertools import islice
+from typing import List, Optional, Union, TYPE_CHECKING
 import numpy as np
+
+if TYPE_CHECKING:
+    from dingus.mesh.element_class import SpectralElement
 
 class SpectralMortar:
     """
@@ -31,14 +32,14 @@ class SpectralMortar:
         self.mortar_type       = mortar_type       # 2D = 'edge', 3D = 'face'
 
         # Element / connectivity information
-        self.connected_elements          = None
-        self.connected_elements_face_map = None
+        self.connected_elements : List[Optional['SpectralElement']] = [None, None]
+        self.connected_elements_face_map                            = None
 
         # Curvature information
         self.mortar_curvature  = None
 
         # Boundary condition information
-        self.bc_name           = None
+        self.bc_name           = str
 
         # Spectral data (to be initialized later)
         self.quad_node_coords = None
