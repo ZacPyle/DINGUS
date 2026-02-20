@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dingus-dg"
-version = "0.0.1"
+version = "0.0.2"
 description = "DINGUS — Discontinuous Isoparametric/Nodal Galerkin Unsteady Solver (Python, DG spectral element CFD)"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -18,7 +18,7 @@ dependencies = [
   "pyyaml",
   "meshio",
   "rich",
-  "typer[all]",
+  "typer",
 ]
 
 # Optional extras you install like: pip install -e ".[dev,viz,mpi]"
@@ -59,3 +59,6 @@ select = ["E", "F", "I", "B", "UP"]
 
 [tool.isort]
 profile = "black"
+
+[tool.setuptools.package-data]
+dingus = ["py.typed"]
