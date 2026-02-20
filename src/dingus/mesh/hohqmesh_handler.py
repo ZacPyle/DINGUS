@@ -39,14 +39,12 @@ def read_hohqmesh(path: Union[str, Path]) -> Dict[str, Any]:
 
         case _:
             # This covers ism, ism-mm, and unknown formats
-            raise NotImplementedError(
-                f"ISM and ISM-MM format not implemented for HOHQMesh mesh files!"
-            )
+            raise NotImplementedError("ISM and ISM-MM format not implemented for HOHQMesh mesh files!")
 
     raise ValueError(f"Unknown format for HOHQMesh mesh file! Header: {header}")
 
 
-def read_ism_v2_2D(p: Path) -> Dict[str, Any]:
+def read_ism_v2_2D(p: Path) -> dict[str, Any]:
     """
     Reads a HOHQMesh mesh file writtin in the ISM-V2 format.
 
@@ -74,7 +72,7 @@ def read_ism_v2_2D(p: Path) -> Dict[str, Any]:
         meshData["num_nodes"]     = numNodes
         meshData["num_mortars"]   = numMortars
         meshData["num_elements"]  = numElements
-        meshData["bc_poly_order"] = BCPolyOrder
+        meshData["poly_order"]    = BCPolyOrder
 
         # Read in the node coordinates using np.loadtxt. This is more robust than
         # np.fromfile, however for large meshes it is slower.

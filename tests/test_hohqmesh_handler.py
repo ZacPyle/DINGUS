@@ -55,7 +55,7 @@ def test_read_hohqmesh_ism_v2():
     assert meshData["num_nodes"]      == 36
     assert meshData["num_mortars"] == 60
     assert meshData["num_elements"]   == 25
-    assert meshData["bc_poly_order"]  == 8
+    assert meshData["poly_order"]  == 8
 
     # Check that the nodes were read in correctly
     assert meshData["nodes"].shape   == (meshData["num_nodes"], 3)

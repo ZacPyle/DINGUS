@@ -4,6 +4,7 @@ import dingus.mesh.hohqmesh_handler as hohqmesh
 import dingus.mesh.gmsh_handler as gmsh
 from dingus.mesh import element_class
 from dingus.mesh import mortar_class
+import numpy as np
 from pathlib import Path
 from pprint import pprint
 from typing import Any, Dict, List, Optional, Union
@@ -19,7 +20,6 @@ class Mesh:
 
     def __init__(self) -> None:
         # Instantiate empty attributes
-        self.bc_poly_order : int = 0
         self.dim           : int = 2
         self.el_poly_order : int = 0
         self.elements      : List['element_class.SpectralElement'] = []
@@ -28,6 +28,9 @@ class Mesh:
         self.num_elements  : int = 0
         self.num_mortars   : int = 0
         self.num_nodes     : int = 0
+        self.quad_nodes    : np.ndarray = np.array([])
+        self.quad_weights  : np.ndarray = np.array([])
+        self.quad_type     : str = ""
         self.raw_data      : Dict[str, Any] = {}
 
     def read_mesh(self, fileName: Union[str, Path]) -> None:
@@ -53,14 +56,6 @@ class Mesh:
             fileName (Union[str, Path]): Path to the mesh file, including the file name.
                 Example: 'mesh/Square.mesh'
         """
-
-        # Instantiate empty attributes
-        self.dim          : int = 2
-        self.num_elements : int = 0
-        self.num_nodes    : int = 0
-        self.num_mortars  : int = 0
-        self.bc_poly_order: int = 0
-
         # Ensure fileName is a Path object
         fileName = Path(fileName)
 
@@ -89,7 +84,12 @@ class Mesh:
         self.num_nodes      = self.raw_data["num_nodes"]
         self.num_elements   = self.raw_data["num_elements"]
         self.num_mortars    = self.raw_data["num_mortars"]
-        self.bc_poly_order  = self.raw_data["bc_poly_order"]
+        self.bc_poly_order  = self.raw_data["poly_order"]
+        self.el_poly_order  = self.raw_data["poly_order"]
+
+        # ADD CONTROL FILE READING TO GRAB DIMENSIONALITY AND QUADRATURE TYPE IN THE FUTURE, 
+        # FOE NOW WE JUST HARDCODE FOR TESTING
+        #self.quad_type = "LG"
 
     def construct_elements(self) -> None:
         """

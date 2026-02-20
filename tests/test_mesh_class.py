@@ -19,8 +19,6 @@ def test_mesh_class_basic_info(test_mesh : mesh_class.Mesh = my_mesh):
     Tests the reading of a mesh file and construction of Element and Mortar objects within
     the Mesh class.
     """
-    # Inistantiate the Mesh object
-    test_mesh = mesh_class.Mesh()
 
     # Read in a mesh file
     test_mesh.read_mesh(TESTS_INPUT / "2D" / "Square_ISMV2.mesh")
