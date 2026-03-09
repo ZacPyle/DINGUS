@@ -1,5 +1,5 @@
 from dingus.mesh.gmsh_handler import read_gmsh
-from dingus.mesh.general_mesh_handler import plot_gmesh
+from dingus.IO.meshPlotter import plot_gmesh
 from pathlib import Path
 import numpy as np
 

@@ -41,8 +41,8 @@ class SpectralElement:
         self.mortar_curvature = np.array([])
 
         # Spectral data (to be initialized later)
-        self.quad_node_coords = None
-        self.quad_weights     = None
+        self.quad_node_coords = np.array([])
+        self.quad_weights     = np.array([])
         self.jacobian         = None
         self.jacobian_inv     = None
         self.metric_terms     = None

@@ -1,5 +1,5 @@
 # src/dingus/mesh/mesh_class.py
-
+import dingus.coreNumerics.mapping as mapping
 import dingus.mesh.hohqmesh_handler as hohqmesh
 import dingus.mesh.gmsh_handler as gmsh
 from dingus.mesh import element_class
@@ -176,6 +176,47 @@ class Mesh:
                 mort.bc_name = self.elements[el_id_right-1].boundary_condition_names[el_face_right-1]
             if el_id_right == 0:
                 mort.bc_name = self.elements[el_id_left-1 ].boundary_condition_names[el_face_left-1 ]
+
+    def construct_mesh(self) -> None:
+        """
+        Constructs the mesh by calling the appropriate methods in the correct order. This is a wrapper function
+        that calls the following methods in order:
+            - self.construct_elements()
+            - self.construct_mortars()
+            - self.link_elements_and_mortars()
+            - self.compute_isoparametric_mapping()
+            - self.apply_mortar_curvature()
+            - self.apply_boundary_conditions()
+        """
+
+        self.construct_elements()
+        self.construct_mortars()
+        self.link_elements_and_mortars()
+        # self.compute_isoparametric_mapping()
+        # self.apply_mortar_curvature()
+        # self.apply_boundary_conditions()
+
+    def compute_isoparametric_mapping(self) -> None:
+        """
+        Maps coordinates from the reference element [-1, 1]^D (where D is the dimensionality of the mesh) to 
+        the physical domain in each element. This is done following the standard isoparametric mapping procedure 
+        described in         Chapter 6 of David Kopriva's "Implementing Spectral Methods for Partial Differential
+        Equations".
+        """
+
+        # Create a dispatch dictionary to call appropriate mapping funciton based on dimensionality.
+        MAPPING_DISPATCH = {
+            1: mapping.isop_map_1d,
+            2: mapping.isop_map_2d,
+            3: mapping.isop_map_3d,
+        }
+
+        # Throw error if dimensionality is not supported
+        if self.dim not in MAPPING_DISPATCH:
+            raise NotImplementedError(f"Isoparametric mapping not implemented for dimensionality: {self.dim}")
+        
+        # Call map dispatcher
+        MAPPING_DISPATCH[self.dim](self)
     
     def apply_mortar_curvature(self) -> None:
         """
