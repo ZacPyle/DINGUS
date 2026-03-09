@@ -43,4 +43,11 @@ def test_isop_map_2d(test_mesh : mesh_class.Mesh = my_mesh):
     test_mesh.compute_isoparametric_mapping()
 
     # Plot the mesh to visually inspect the mapping of quadrature nodes
-    meshPlotter.plot_mesh(test_mesh)
+    ax = meshPlotter.plot_mesh(test_mesh, show = False)
+
+    # Check that the figure was created successfully
+    assert ax is not None
+
+    # Save the output for inspection
+    fig = ax.figure
+    fig.savefig(TESTS_OUTPUT / "2D" /"QuadratureTest_2D.png", dpi=200)
