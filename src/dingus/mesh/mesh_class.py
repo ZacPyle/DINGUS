@@ -160,14 +160,19 @@ class Mesh:
 
             # Link the elements to the mortar. Remember to convert from 1-based to 0-based indexing and to handle
             # boundary mortars (where one of the element IDs is zero)
+            # TODO: el_face_right can be negative for non-orthogonal meshes, indicating that the
+            # node ordering along the shared side runs in the opposite direction relative to the
+            # left element. For now we use abs() to get the correct face index, but when implementing
+            # curved boundaries the sign must be used to reverse the spline knot ordering for this
+            # side to ensure consistent interpolation between elements. See ISM-V2 docs for details.
             mort.connected_elements = [self.elements[el_id_left-1]  if el_id_left  != 0 else None,
                                        self.elements[el_id_right-1] if el_id_right != 0 else None]
             
             # Link the mortar to the elements
             if el_id_left != 0:
-                self.elements[el_id_left-1 ].connected_mortars[el_face_left-1 ] = mort
+                self.elements[el_id_left-1 ].connected_mortars[abs(el_face_left)-1 ] = mort
             if el_id_right != 0:
-                self.elements[el_id_right-1].connected_mortars[el_face_right-1] = mort
+                self.elements[el_id_right-1].connected_mortars[abs(el_face_right)-1] = mort
 
             # If this is a boundary mortar, grab the boundary condition name from the element. Remember, if the
             # RIGHT element id = 0, that means the LEFT element is physical and contains the BC information; if

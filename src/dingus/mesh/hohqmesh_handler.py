@@ -1,6 +1,6 @@
 # src/dingus/mesh/hohqmesh_handler.py
 from pathlib import Path
-from typing import Dict, Any, Union
+from typing import Dict, Any, Tuple, Union
 from itertools import islice
 import numpy as np
 
@@ -74,6 +74,10 @@ def read_ism_v2_2D(p: Path) -> dict[str, Any]:
         meshData["num_elements"]  = numElements
         meshData["poly_order"]    = BCPolyOrder
 
+        # Spline info in case of curved boundaries
+        numSplineNodes = BCPolyOrder + 1
+
+        # --- Nodes ---
         # Read in the node coordinates using np.loadtxt. This is more robust than
         # np.fromfile, however for large meshes it is slower.
         meshData["nodes"] = np.loadtxt(
@@ -89,35 +93,48 @@ def read_ism_v2_2D(p: Path) -> dict[str, Any]:
         #     count=numNodes * 3
         # ).reshape(numNodes, 3)
 
-        # Read in the connectivity / mortar data
+        # --- Mortars ---
         meshData["mortars"] = np.fromfile(
             meshFile, dtype=np.int32, sep=" ", count=numMortars * 6
         ).reshape(numMortars, 6)
 
-        # Read in the boundary condition and element data
-        rawElementData = list(islice(meshFile, numElements * 3))
+        # --- Elements ---
+        # Pre-allocate arrays for the straight-sided element data
+        elementNodeIDs      = np.zeros((numElements, 4), dtype=np.int32)
+        mortarCurvatureType = np.zeros((numElements, 4), dtype=np.int32)
+        elementBCNames      = np.empty((numElements, 4), dtype=object)
 
-        # eliminate trailing newline characters and spaces
-        rawElementData = [line.strip() for line in rawElementData]
+        # Preallocate a dictionary for the spline data, keyed as
+        # (element_idx, side_idx) -> np.ndarray of shape (numSplineNodes, 3)
+        splineData: Dict[tuple, np.ndarray] = {}
 
-        # Grab the nodeIDs for each element, mortar curvature type, and BC names for
-        # each element. Because the data is stored in the same line per element
-        # block, we can use slicing to quickly extract the data.
-        meshData["elementNodeIDs"] = np.fromstring(
-            " ".join(rawElementData[0::3]), sep=" ", dtype=np.int32
-        ).reshape(numElements, 4)
-        meshData["mortarCurvatureType"] = np.fromstring(
-            " ".join(rawElementData[1::3]), sep=" ", dtype=np.int32
-        ).reshape(numElements, 4)
+        for el_idx in range(numElements):
+            # First line of each element block contains the node IDs for each corner node
+            elementNodeIDs[el_idx, :] = list(map(int, next(meshFile).split()))
 
-        # Because the BC data is string-based, we need to parse it differently
-        tempBCData = rawElementData[2::3]
-        tempBCData_split = " ".join(tempBCData).split()
-        meshData["elementBCNames"] = np.array(tempBCData_split, dtype=object).reshape(
-            numElements, 4
-        )
+            # Second line of each element block contains the curvature flags for each mortar
+            bFlags = list(map(int, next(meshFile).split()))
+            mortarCurvatureType[el_idx, :] = bFlags
 
-        # Optional: convert '---' to None
-        meshData["elementBCNames"][meshData["elementBCNames"] == "---"] = None
+            # Read in spline data for each curved mortar IF APPLICABLE
+            for side_idx, flag in enumerate(bFlags):
+                if flag == 1:
+                    # Read in the spline knot points for the mortar. Each spline is composed
+                    # of BCPolyOrder + 1 knot points.
+                    knots = np.loadtxt(
+                        islice(meshFile, numSplineNodes),
+                        dtype=np.float64,
+                        usecols=(0, 1, 2)
+                    )
+                    splineData[(el_idx, side_idx)] = knots
+
+            # Final line in each element block is the BC name for each side. If no BC is applied, the name is '---'
+            bc_names = next(meshFile).split()
+            elementBCNames[el_idx, :] = [None if name == "---" else name for name in bc_names]
+
+        meshData["elementNodeIDs"]      = elementNodeIDs
+        meshData["mortarCurvatureType"] = mortarCurvatureType
+        meshData["elementBCNames"]      = elementBCNames
+        meshData["splineData"]          = splineData
 
         return meshData

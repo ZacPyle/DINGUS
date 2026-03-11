@@ -2,42 +2,39 @@ import numpy as np
 import dingus.mesh.mesh_class as mesh_class
 import dingus.coreNumerics.quadrature as quadrature
 import dingus.IO.meshPlotter as meshPlotter
+import pytest
 from pathlib import Path
 from pprint import pprint
 
 TESTS_INPUT  = Path(__file__).resolve().parent / "testInputs" 
 TESTS_OUTPUT = Path(__file__).resolve().parent / "testOutputs"
 
-# Inistantiate the Mesh object
-my_mesh = mesh_class.Mesh()
+MESH_TEST_CASES = [
+    ("Square_ISMV2.mesh", "LG"),
+    ("Square2.mesh",      "LG"),
+]
 
-# Read in a mesh file
-my_mesh.read_mesh(TESTS_INPUT / "2D" / "Square_ISMV2.mesh")
+@pytest.fixture(params=MESH_TEST_CASES,
+                ids=[case[0] for case in MESH_TEST_CASES],
+                scope="module")
+def mesh_fixture(request):
+    mesh_file, quad_type = request.param
 
-# Build the mesh
-my_mesh.construct_mesh()
+    m = mesh_class.Mesh()
+    m.read_mesh(TESTS_INPUT / "2D" / mesh_file)
+    m.construct_mesh()
+    m.quad_type = quad_type
+    quadrature.Compute_Quadrature_Nodes_And_Weights(m)
 
-# Assert LG quadrature; this should be set in the control file but for now
-# we hardcode it for testing.
-my_mesh.quad_type = "LG"
+    return m, mesh_file
 
-# Compute quadrature nodes and weights
-quadrature.Compute_Quadrature_Nodes_And_Weights(my_mesh)
-
-# def test_isop_map_1d(test_mesh : mesh_class.Mesh = my_mesh):
-#     '''
-#     Tests the isoparametric mapping of quadrature nodes from the reference element [-1, 1] to
-#     an arbitrary 1D range within each element.
-#     '''
-
-#     # Compute the isoparametric mapping
-#     test_mesh.compute_isoparametric_mapping()
-
-def test_isop_map_2d(test_mesh : mesh_class.Mesh = my_mesh):
+def test_isop_map_2d(mesh_fixture):
     '''
     Tests the isoparametric mapping of quadrature nodes from the reference element [-1, 1] to
     an arbitrary 1D range within each element.
     '''
+
+    test_mesh, mesh_file = mesh_fixture
 
     # Compute the isoparametric mapping
     test_mesh.compute_isoparametric_mapping()
@@ -48,6 +45,7 @@ def test_isop_map_2d(test_mesh : mesh_class.Mesh = my_mesh):
     # Check that the figure was created successfully
     assert ax is not None
 
-    # Save the output for inspection
-    fig = ax.figure
-    fig.savefig(TESTS_OUTPUT / "2D" /"QuadratureTest_2D.png", dpi=200)
+    # Save the output figure, named after the mesh file for easy identification
+    stem = Path(mesh_file).stem
+    fig  = ax.figure
+    fig.savefig(TESTS_OUTPUT / "2D" / f"QuadratureTest_2D_{stem}.png", dpi=200)
