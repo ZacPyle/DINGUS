@@ -127,6 +127,8 @@ def plot_mesh_1D(myMesh: 'mesh_class.Mesh', ax: Optional[plt.Axes] = None, show:
     - myMesh: Mesh object containing the element structure and corresponding quadrature nodes.
     '''
 
+    # TODO: Implement 1D mesh plotting (line segments for elements, points for nodes and quadrature nodes)
+
     raise NotImplementedError("1D mesh plotting not yet implemented.")
 
 def plot_mesh_2D(myMesh: 'mesh_class.Mesh', ax: Optional[plt.Axes] = None, show: bool = True,
