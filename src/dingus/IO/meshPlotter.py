@@ -124,12 +124,72 @@ def plot_mesh_1D(myMesh: 'mesh_class.Mesh', ax: Optional[plt.Axes] = None, show:
     mesh structures are properly generated.
 
     Inputs: 
-    - myMesh: Mesh object containing the element structure and corresponding quadrature nodes.
+    - myMesh          : Mesh object containing the element structure and corresponding quadrature nodes.
+    - ax              : Optional existing Axes to plot into. A new figure is created if None.
+    - show            : If True, call plt.show() at the end.
+    - edge_color      : Color for element boundary edges.
+    - node_color      : Color for element corner nodes.
+    - quad_node_color : Color for quadrature nodes inside each element.
+    - lw              : Line width for element edges.
+    - ms              : Marker size for element corner nodes.
+    - quad_ms         : Marker size for quadrature nodes.
+
+    Outputs:
+    - ax: The matplotlib Axes object.
     '''
 
     # TODO: Implement 1D mesh plotting (line segments for elements, points for nodes and quadrature nodes)
 
     raise NotImplementedError("1D mesh plotting not yet implemented.")
+
+    # Create a figure if Axes is not provides
+    if ax is None:
+        fig, ax = plt.subplots()
+
+    # Initialize a switch that signals if quadrature nodes are present in the mesh or not
+    has_quad_nodes = False
+
+    # Loop through each element, plotting the element boundaries and quadrature nodes (if present)
+    for e in myMesh.elements:
+        # --- Draw element boundary ---
+        corners = e.node_coords[:,:2]  # shape (2, 2) for 1D mesh
+
+        # Plot the element
+        ax.plot(corners[:, 0], corners[:, 1], "-", color=edge_color, linewidth=lw)
+
+        # --- Draw the corner nodes --
+        ax.plot(corners[:, 0], corners[:, 1], "o", color=node_color, markersize=ms)
+
+        # Draw the quadrature nodes if the isoparametric mapping has been computed
+        if e.quad_node_coords is not None and np.asarray(e.quad_node_coords).size > 0:
+            has_quad_nodes = True    # Update switch
+            quad_coords    = np.asarray(e.quad_node_coords) # Shape (P, P, 2) OR (P*P, 2)
+
+            # Plot quadrature nodes
+            ax.plot(quad_coords[:, :, 0].ravel(), quad_coords[:, :, 1].ravel(), ".", 
+                    color=quad_node_color, markersize=quad_ms)
+            
+            # # Draw dashed lines along rows (constant xi)
+            # for i in range(quad_coords.shape[0]):
+            #     ax.plot(quad_coords[i, :, 0], quad_coords[i, :, 1], "--", color=quad_node_color, linewidth=0.5)
+
+            # # Draw dashed lines along columns (constant eta)
+            # for j in range(quad_coords.shape[1]):
+            #     ax.plot(quad_coords[:, j, 0], quad_coords[:, j, 1], "--", color=quad_node_color, linewidth=0.5)
+    
+    # Final adjustments to the plot
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlabel("x")
+
+    title = "1D Mesh"
+    if has_quad_nodes:
+        title += " with Quadrature Nodes"
+    ax.set_title(title)
+
+    if show:
+        plt.show()
+
+    return ax
 
 def plot_mesh_2D(myMesh: 'mesh_class.Mesh', ax: Optional[plt.Axes] = None, show: bool = True,
                  edge_color="k", node_color="b", quad_node_color="r", lw=1.0, ms=4.0, quad_ms=2.5):

@@ -28,6 +28,18 @@ def isop_map_1d(myMesh: 'mesh_class.Mesh') -> None:
 
     # Create 1D arrays of computational domain coordinates (aka the quadrature nodes)
     xi = myMesh.quad_nodes
+    
+    # Pre-compute the (1 +/- xi) terms to avoid redundant computation per element
+    N1 = (1 - xi) / 2   # Shape function for node 1 (left)
+    N2 = (1 + xi) / 2   # Shape function for node 2 (right)
+
+    # Loop over elements and compute mapping
+    for e in myMesh.elements:
+        # Grab physical domain coordinates of the element corners
+        corners = e.node_coords
+
+        # compute 1D mapping; no need for matrix multiplication in this simple case
+        e.quad_node_coords = N1 * corners[0,0] + N2 * corners[1,0]
 
 def isop_map_2d(myMesh: 'mesh_class.Mesh') -> None:
     '''
