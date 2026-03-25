@@ -222,6 +222,50 @@ class Mesh:
         
         # Call map dispatcher
         MAPPING_DISPATCH[self.dim](self)
+
+    def compute_mapping_derivatives(self) -> None:
+        """
+        Computes the derivatives of the physical domain coordinates with respect to the computational/reference
+        domain coordinates (e.g., dXdXi, dZdEta, ...). These derivatives are used to compute the covariant 
+        vectors, thus the contravariant vectors, thus all the cell metrics. For details, see 
+        src/dingus/coreNumerics/mapping.py and Chapter 6 of Kopriva.
+        """
+
+        # Ensure elements are created and quadrature nodes have been populated
+        if not self.elements:
+            raise RuntimeError("Must call construct_mesh() before compute_mapping_derivatives_2d()!")
+        if not self.quad_nodes.size:
+            raise RuntimeError("Must call Compute_Quadrature_Nodes_And_Weights() before compute_mapping_derivatives_2d()!")
+
+        # Create a dispatch dictionary to call appropriate mapping function based on dimensionality.
+        DERIVATIVES_DISPATCH = {
+            1: mapping.compute_mapping_derivatives_1d,
+            2: mapping.compute_mapping_derivatives_2d,
+            3: mapping.compute_mapping_derivatives_3d,
+        }
+
+        # Throw error if dimensionality is not supported
+        if self.dim not in DERIVATIVES_DISPATCH:
+            raise NotImplementedError(f"Spatial derivative mapping not implemented for dimensionality: {self.dim}")
+        
+        # Call map dispatcher
+        DERIVATIVES_DISPATCH[self.dim](self)
+
+    def compute_element_metrics(self) -> None:
+        """
+        Computes the metric terms (e.g., the co/contra-variant vectors, Jacobian determinant, ...) within each element
+        of a mesh. These are needed for mapping the Navier-Stokes equations from the physical domain to the 
+        computational / reference domain. For details on the equation mapping and the derivation of the metric equations
+        used in this function, see Chapter 6 of Kopriva.
+        """
+
+        # TODO: Compute element metrics:
+        # - mapping derivatives
+        # - covariant vectors
+        # - contravariant vectors
+        # - Jacobian determinant
+        # - Inverse Jacobian determinant?
+        # - outward unit normal at element boundaries
     
     def apply_mortar_curvature(self) -> None:
         """

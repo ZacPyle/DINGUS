@@ -46,6 +46,15 @@ class SpectralElement:
         self.jacobian         = None
         self.jacobian_inv     = None
         self.metric_terms     = None
+        self.dXdXi            = np.array([])
+        self.dXdEta           = np.array([])
+        self.dXdZeta          = np.array([])
+        self.dYdXi            = np.array([])
+        self.dYdEta           = np.array([])
+        self.dYdZeta          = np.array([])
+        self.dZdXi            = np.array([])
+        self.dZdEta           = np.array([])
+        self.dZdZeta          = np.array([])
         
         # Solution data
         self.solution = None
