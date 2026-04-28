@@ -37,7 +37,8 @@ def test_isop_map_2d(mesh_fixture):
     test_mesh, mesh_file = mesh_fixture
 
     # Compute the isoparametric mapping
-    test_mesh.compute_isoparametric_mapping()
+    #test_mesh.compute_isoparametric_mapping()
+    test_mesh.compute_element_metrics()
 
     # Plot the mesh to visually inspect the mapping of quadrature nodes
     ax = meshPlotter.plot_mesh(test_mesh, show = False)

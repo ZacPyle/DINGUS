@@ -33,6 +33,8 @@ class SpectralElement:
         # Mortar / connectivity information (to be initialized later)
         self.mortar_ids                                           = np.array([])
         self.connected_mortars : List[Optional['SpectralMortar']] = [None, None, None, None]  # Hardcoded for 2D; generalize later
+        #self.connected_mortars : List[Optional['SpectralMortar']] = []  # Hardcoded for 2D; generalize later
+        self.face_sign_map                                        = np.array([]) 
 
         # Boundary condition information
         self.boundary_condition_names = np.array([])
@@ -41,20 +43,29 @@ class SpectralElement:
         self.mortar_curvature = np.array([])
 
         # Spectral data (to be initialized later)
-        self.quad_node_coords = np.array([])
-        self.quad_weights     = np.array([])
-        self.jacobian         = None
-        self.jacobian_inv     = None
-        self.metric_terms     = None
-        self.dXdXi            = np.array([])
-        self.dXdEta           = np.array([])
-        self.dXdZeta          = np.array([])
-        self.dYdXi            = np.array([])
-        self.dYdEta           = np.array([])
-        self.dYdZeta          = np.array([])
-        self.dZdXi            = np.array([])
-        self.dZdEta           = np.array([])
-        self.dZdZeta          = np.array([])
+        self.quad_node_coords  = np.array([])
+        self.quad_weights      = np.array([])
+        self.jacobian          = np.array([])
+        self.jacobian_inv      = np.array([])
+        self.jacobian_det      = np.array([])
+        self.covar_xi          = np.array([])
+        self.covar_eta         = np.array([])
+        self.covar_zeta        = np.array([])
+        self.contravar_xi      = np.array([])
+        self.contravar_eta     = np.array([])
+        self.contravar_zeta    = np.array([])
+        self.dXdXi             = np.array([])
+        self.dXdEta            = np.array([])
+        self.dXdZeta           = np.array([])
+        self.dYdXi             = np.array([])
+        self.dYdEta            = np.array([])
+        self.dYdZeta           = np.array([])
+        self.dZdXi             = np.array([])
+        self.dZdEta            = np.array([])
+        self.dZdZeta           = np.array([])
+        self.normal_xi         = np.array([])
+        self.normal_eta        = np.array([])
+        self.normal_zeta       = np.array([])
         
         # Solution data
         self.solution = None
