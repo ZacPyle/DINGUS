@@ -433,7 +433,7 @@ def compute_covariant_and_contravariant_vectors_1d(e: 'element_class.SpectralEle
     '''
 
     e.covar_xi     = e.dXdXi
-    e.contravar_xi = np.ones((*e.dXdXi,1))
+    e.contravar_xi = np.ones((*e.dXdXi.shape,1))
 
 def compute_covariant_and_contravariant_vectors_2d(e: 'element_class.SpectralElement') -> None:
     '''
