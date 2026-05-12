@@ -31,7 +31,7 @@ NODE_SETS = [
 # -----------------------------------------------------------------------
 # Helper: a few simple test polynomials and their derivatives
 # -----------------------------------------------------------------------
-def poly_const(x):   return np.ones_like(x)                     # f(x) = 1,    f'(x) = 0
+def poly_const(x):   return np.ones_like(x)                      # f(x) = 1,    f'(x) = 0
 def poly_linear(x):  return x                                    # f(x) = x,    f'(x) = 1
 def poly_quad(x):    return x**2                                 # f(x) = x^2,  f'(x) = 2x
 def poly_cubic(x):   return x**3                                 # f(x) = x^3,  f'(x) = 3x^2

@@ -1,7 +1,7 @@
 # src/dingus/cli.py
 import typer
 from rich import print
-from .config import load_case_yaml
+from dingus.config import load_case_yaml
 from .runner import run_case
 
 app = typer.Typer(help="DINGUS — DG spectral element CFD (Python)")

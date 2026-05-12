@@ -10,15 +10,15 @@ from typing import Any, List, Literal, Dict,  Optional
 def default_case_name() -> str:
     """
     Generate a default case name based on the current date and time. This function is 
-    used as the default factory for the 'name' field in the 'CaseCnfg' class. Alternatively, 
-    users can specify choose to use a 'lambda' function within the CaseCnfg definition. I 
+    used as the default factory for the 'name' field in the 'CaseCfg' class. Alternatively, 
+    users can specify choose to use a 'lambda' function within the CaseCfg definition. I 
     find the helper function approach to be more intuitive.
     """
 
     return datetime.now().strftime("%Y_%m_%d__%H:%M:%S")
 
 # Configuration classes ###################################################################
-class PhysicsCnfg(BaseModel):
+class PhysicsCfg(BaseModel):
     # Define the parameters for physics modeling
     equation  : Literal['scalar_advection',                               # Physics model / governing equations
                         'euler', 
@@ -39,7 +39,7 @@ class PhysicsCnfg(BaseModel):
     
     # Create a validator to print errors and warnings related to the selected physics parameters.
     @model_validator(mode='after')
-    def check_physics_params(self) -> 'PhysicsCnfg':
+    def check_physics_params(self) -> 'PhysicsCfg':
 
         # Errors ----------------------------------------------
         if self.equation == 'navier-stokes' and self.Re is None:
@@ -57,7 +57,7 @@ class PhysicsCnfg(BaseModel):
             warnings.warn("gamma (ratio of specific heats) not specified. Defaulting to gamma = 1.4.")
         return self
 
-class MeshCnfg(BaseModel):
+class MeshCfg(BaseModel):
     # Define the parameters for mesh configuration
     mesh_format : Literal['HOHQMesh','gmsh']    = Field(...,
                                                         description='Mesh format used for the simulation. Must be explicitly set.')    
@@ -76,20 +76,13 @@ class MeshCnfg(BaseModel):
     
     # Create a validator to print errors and warnings related to the selected physics parameters.
     @model_validator(mode='after')
-    def check_mesh_params(self) -> 'MeshCnfg':
+    def check_mesh_params(self) -> 'MeshCfg':
 
         # Errors ----------------------------------------------
-        if self.mesh_format not in self.model_fields_set:
-            raise ValueError("mesh_format must be specified. Supported formats are 'HOHQMesh' and 'gmsh'.")
+        
         
         if self.mesh_format not in ['HOHQMesh', 'gmsh']:
             raise ValueError(f"Unsupported mesh_format: '{self.mesh_format}'. Supported formats are 'HOHQMesh' and 'gmsh'.")
-        
-        if self.mesh_file not in self.model_fields_set:
-            raise ValueError("mesh_file must be specified. Please provide the name of the mesh file to load, including the path if it is not located in the same directory as the case YAML file.")
-        
-        if self.ndim not in self.model_fields_set:
-            raise ValueError("ndim (number of spatial dimensions) must be specified. Choose 1, 2, or 3.")
         
         if self.ndim not in [1, 2, 3]:
             raise ValueError(f"Unsupported ndim: '{self.ndim}'. Supported dimensionalities are 1, 2, or 3.")
@@ -98,6 +91,7 @@ class MeshCnfg(BaseModel):
             raise ValueError(f"Unsupported quad_type: '{self.quad_type}'. Supported quadrature types are 'LG' (Legendre-Gauss) and 'LGL' (Legendre-Gauss-Lobatto).")
         
         # Warnings --------------------------------------------
+        
         if self.quad_type not in self.model_fields_set:
             warnings.warn("quad_type not specified. Defaulting to 'LG' (Legendre-Gauss) quadrature.")
 
@@ -106,7 +100,7 @@ class MeshCnfg(BaseModel):
 
         return self
 
-class TimeIntegratorCnfg(BaseModel):
+class TimeIntegratorCfg(BaseModel):
     # Define the parameters for time integration
     time_integrator : Literal['euler','rk2', 'rk4']   = Field(...,                 # Time integrator
                                                               description='Time integration scheme to use. Must be explicitly set.')
@@ -119,20 +113,12 @@ class TimeIntegratorCnfg(BaseModel):
     
     # Create a validator to print errors and warnings related to the selected physics parameters.
     @model_validator(mode='after')
-    def check_time_params(self) -> 'TimeIntegratorCnfg':
+    def check_time_params(self) -> 'TimeIntegratorCfg':
         # Errors ---------------------------------------------
-        if self.time_integrator not in self.model_fields_set:
-            raise ValueError("time_integrator must be specified. Supported options are 'euler', 'rk2', and 'rk4'.")
-        
-        if self.cfl not in self.model_fields_set:
-            raise ValueError("cfl must be specified. Choose a value between 0 and 1.")
-        
-        if self.final_time not in self.model_fields_set:
-            raise ValueError("final_time must be specified. Choose a positive value for the end time of the simulation.")
 
         return self
     
-class CaseCnfg(BaseModel):
+class CaseCfg(BaseModel):
     """
     Top-level configuration object for a simulation case. 
     This class synthesizes the 'Physics', 'Mesh', and 'TimeIntegrator' classes 
@@ -143,22 +129,22 @@ class CaseCnfg(BaseModel):
     name    : str            = Field(default_factory=default_case_name,        # Name of the case (primarily used for output operations)
                                      description='Name of the simulation case. This is primarily used for output operations. If not specified, it will default to the date/time the simulation was started.')
     
-    mesh    : MeshCnfg       = Field(...,                                                  # Mesh configuration block. 
+    mesh    : MeshCfg       = Field(...,                                                  # Mesh configuration block. 
                                      description='Mesh configuration. Requires inputs that must be explicitly set within the mesh block of the case YAML file.')
     
-    physics : PhysicsCnfg    = Field(...,                                                  # Physics configuration block.
+    physics : PhysicsCfg    = Field(...,                                                  # Physics configuration block.
                                      description='Physics configuration. Requires inputs that must be explicitly set within the physics block of the case YAML file.')
     
-    time_stepping : TimeIntegratorCnfg = Field(...,                                      # Time integration configuration block.
+    time_stepping : TimeIntegratorCfg = Field(...,                                      # Time integration configuration block.
                                                  description='Time integration configuration. Requires inputs that must be explicitly set within the time block of the case YAML file.')
     
     misc: Dict[str, Any]     = Field(default_factory=dict,                                 # Miscellaneous user-defined parameters.
         description="Optional miscellaneous user-defined parameters.")
 
-__all__ = ['PhysicsCnfg', 'MeshCnfg', 'TimeIntegratorCnfg', 'CaseCnfg']
+__all__ = ['PhysicsCfg', 'MeshCfg', 'TimeIntegratorCfg', 'CaseCfg']
 
-def load_case_yaml(path: str) -> CaseCnfg:
-    """Load a YAML case file and return a validated `CaseCnfg`.
+def load_case_yaml(path: Path) -> CaseCfg:
+    """Load a YAML case file and return a validated `CaseCfg`.
 
     This function adapts common camelCase keys to the snake_case names
     used in the pydantic model so users may keep legacy/camelCase
@@ -167,8 +153,12 @@ def load_case_yaml(path: str) -> CaseCnfg:
     p   = Path(path)                       # Path object for the YAML file you want to load
     raw = yaml.safe_load(p.read_text())    # Load the raw YAML data into a dictionary
 
+    breakpoint()
+
     # Adapt mesh block / top-level keys with common alternatives
     mesh_block = raw.get("mesh", {}) if isinstance(raw.get("mesh", {}), dict) else {}
+
+    breakpoint()
 
     adapted = {
         "name": raw.get("name", raw.get("caseName", "Case")),
@@ -186,12 +176,12 @@ def load_case_yaml(path: str) -> CaseCnfg:
             "Pr"              : raw.get("physics", {}).get("Pr"      , raw.get("Pr"     , None)),
             "mach_ref"        : raw.get("physics", {}).get("mach_ref", raw.get("physics", {}).get("machRef"     , raw.get("mach_ref"  , raw.get("machRef", None     )))),
         },
-        "time": {
-            "cfl"             : raw.get("time", {}).get("cfl"            , raw.get("cfl", 0.4)),
-            "final_time"      : raw.get("time", {}).get("final_time"     , raw.get("time", {}).get("finalTime"     , raw.get("final_time"     , raw.get("finalTime"     , 1.0    )))),
-            "time_integrator" : raw.get("time", {}).get("time_integrator", raw.get("time", {}).get("timeIntegrator", raw.get("time_integrator", raw.get("timeIntegrator", "euler")))),
+        "time_stepping": {
+            "cfl"             : raw.get("time_stepping", {}).get("cfl"            , raw.get("cfl", 0.4)),
+            "final_time"      : raw.get("time_stepping", {}).get("final_time"     , raw.get("time_stepping", {}).get("finalTime"     , raw.get("final_time"     , raw.get("finalTime"     , 1.0    )))),
+            "time_integrator" : raw.get("time_stepping", {}).get("time_integrator", raw.get("time_stepping", {}).get("timeIntegrator", raw.get("time_integrator", raw.get("timeIntegrator", "euler")))),
         },
         "misc": raw.get("misc", raw.get("meta", {})),
     }
 
-    return CaseCnfg.parse_obj(adapted)
+    return CaseCfg.model_validate(adapted)
