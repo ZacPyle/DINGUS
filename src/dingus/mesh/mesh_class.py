@@ -1,12 +1,15 @@
 # src/dingus/mesh/mesh_class.py
 import dingus.coreNumerics.mapping as mapping
+import dingus.coreNumerics.quadrature as quadrature
 import dingus.mesh.hohqmesh_handler as hohqmesh
 import dingus.mesh.gmsh_handler as gmsh
+import numpy as np
+from dingus.config import CaseCfg
 from dingus.mesh import element_class
 from dingus.mesh import mortar_class
-import numpy as np
 from pathlib import Path
 from pprint import pprint
+from scipy.spatial import Delaunay
 from typing import Any, Dict, List, Optional, Union
 
 
@@ -198,7 +201,7 @@ class Mesh:
             # vector at each face of the element. 
             mort.compute_mortar_face_sign_map(self.dim, el_face_left, el_face_right)          
 
-    def construct_mesh(self) -> None:
+    def construct_mesh(self, case_config : CaseCfg) -> None:
         """
         Constructs the mesh by calling the appropriate methods in the correct order. This is a wrapper function
         that calls the following methods in order:
@@ -210,10 +213,26 @@ class Mesh:
             - self.apply_boundary_conditions()
         """
 
+        # TODO: Add the CaseCfg as an argument to this, then populate the mesh.quad_nodes type. This will allow
+        # all mesh functions to be handled here, instead of building the elements and mortars, then separately
+        # Saving the quadrature type, computing the quadrature nodes, then element metrics, then building
+        # the triangulation.
+
+        self.quad_type     = str(case_config.mesh.quad_type)
+        self.el_poly_order = case_config.mesh.poly_deg
+
+        # Construct elements and mortars, then link them
         self.construct_elements()
         self.construct_mortars()
         self.link_elements_and_mortars()
-        # self.compute_element_metrics()
+
+        # Construct quadrature nodes within each element and compute element metrics
+        quadrature.Compute_Quadrature_Nodes_And_Weights(self)
+        self.compute_element_metrics()
+
+        # Compute Delaunay triangulation for uniform plotting if desired
+        self.build_delaunay_tri()
+        
         # self.apply_mortar_curvature()
         # self.apply_boundary_conditions()
         
@@ -323,3 +342,36 @@ class Mesh:
         """
 
         raise NotImplementedError("Applying boundary conditions not implemented yet!")
+    
+    def build_delaunay_tri(self) -> None:
+        """
+        Creates a Delaunay triangulation based on the quadrature node coordinates. This is saved to 
+        the mesh object for future interpolation (e.g. when / if writing output data on a uniform grid).
+        This must be called AFTER compute_element_metrics() so the quad_node_coords field is actually
+        populated.
+        """
+
+        # Make sure the quadrature nodes are already populated
+        if not self.elements:
+            raise RuntimeError("Must call 'construct_mesh()' BEFORE 'build_delaunay_tri()'!")
+        if self.elements[0].quad_node_coords is None or np.asarray(self.elements[0].quad_node_coords).size == 0:
+            raise RuntimeError("Must call 'compute_element_metrics() BEFORE 'buid_delaunay_tri()'!")
+        
+        # Collect all quadrature node coordinates from the elements and construct an array of 3 column vectors; 
+        # one vector for x, y, and z coordinates (as appropriate).
+        all_coords = np.vstack([
+            e.quad_node_coords[:,:,:self.dim].reshape(-1,2)
+            for e in self.elements
+        ])
+
+        # If Legendre-Gauss-Lobatto (LGL) quadrature is used instead of Legendre-Gauss (LG) then duplicate
+        # quadrature nodes exist on element boundaries. De-dupe them to prevent 
+        if self.quad_type == "LGL":
+            _, unique_idx = np.unique(all_coords, axis=0, return_index=True)
+            unique_coords = all_coords[unique_idx]
+        else: 
+            unique_coords  = all_coords
+
+        # Create and save the Delaunay triangulation
+        self.delaunay_coords = unique_coords
+        self.delaunay_tri    = Delaunay(unique_coords)
