@@ -22,7 +22,9 @@ def mesh_fixture(request):
 
     m = mesh_class.Mesh()
     m.read_mesh(TESTS_INPUT / "2D" / mesh_file)
-    m.construct_mesh()
+    m.construct_elements()
+    m.construct_mortars()
+    m.link_elements_and_mortars()
     m.quad_type = quad_type
     quadrature.Compute_Quadrature_Nodes_And_Weights(m)
 
