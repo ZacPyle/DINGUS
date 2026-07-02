@@ -3,9 +3,9 @@ from dingus.config import load_case_yaml as file_reader
 from dingus.config import CaseCfg
 from pathlib import Path
 from pprint import pprint
-from dingus.InitialConditions.initialize_solution import initialize
+from dingus.initialConditions.initialize_solution import initialize
 import dingus.coreNumerics.quadrature as quadrature
-import dingus.IO.meshPlotter as meshPlotter
+import dingus.io.meshPlotter as meshPlotter
 import dingus.mesh.mesh_class as mesh_class
 import pytest
 

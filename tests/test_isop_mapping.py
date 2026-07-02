@@ -1,7 +1,7 @@
 import numpy as np
 import dingus.mesh.mesh_class as mesh_class
 import dingus.coreNumerics.quadrature as quadrature
-import dingus.IO.meshPlotter as meshPlotter
+import dingus.io.meshPlotter as meshPlotter
 import pytest
 from pathlib import Path
 from pprint import pprint

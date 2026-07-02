@@ -148,11 +148,12 @@ class IOCfg(BaseModel):
                                                description="Number of nodes in the x, y, and z directions used to create the uniform grid (if applicable).")
     
     output_format     : Literal['hdf5',
+                                'vtk',
                                 'txt',
                                 'csv',
                                 'mat',
-                                'vtk'] = Field('hdf5',
-                                               description="Format of the output files. Valid options are: 'hdf5', 'txt', 'csv', 'mat', and 'vtk'. Defaults to 'hdf5'.")
+                                'vtk'] = Field('vtk',
+                                               description="Format of the output files. Valid options are: 'hdf5', 'vtk', 'txt', 'csv', 'mat', and 'vtk'. Defaults to 'vtk'.")
     
     output_interval   : float          = Field(1.0, gt=0.0,
                                                description="Time step interval that data will be written out. e.g., output_interval = 0.5 means data is written out every 0.5 time units. Defaults to 1.0.")
@@ -170,7 +171,7 @@ class IOCfg(BaseModel):
 
         # Warnings -----------------------------------------------------
         if 'output_format' not in self.model_fields_set:
-            warnings.warn("No output data format specified, defaulting to 'hdf5'.")
+            warnings.warn("No output data format specified, defaulting to 'vtk'.")
 
         if 'plot_uniform_grid' not in self.model_fields_set:
             warnings.warn("No preference specified to uniform vs quadrature grid in data output. Defaulting to quadrature grid.")

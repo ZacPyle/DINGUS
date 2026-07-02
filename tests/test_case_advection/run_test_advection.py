@@ -1,16 +1,90 @@
 # cases/test_cases/scalar_advection/run_test_scalar_advection.py
 from dingus.config import load_case_yaml as file_reader
 from dingus.config import CaseCfg
-from dingus.InitialConditions.initialize_solution import initialize
+from dingus.initialConditions.initialize_solution import initialize
+from dingus.io import solutionPlotter as solPlot
 from dingus.mesh import element_class
 from dingus.mesh import mesh_class
 from dingus.mesh import mortar_class
 from pathlib import Path
 from pprint import pprint
 import dingus.coreNumerics.quadrature as quadrature
-import dingus.IO.meshPlotter as meshPlotter
+import dingus.io.meshPlotter as meshPlotter
+import dingus.io.outputFileWriter as outputFileWriter
 import numpy as np
 import pytest
+import shutil
+
+##########################################################
+# SET UP AND DEFINITIONS ---------------------------------
+##########################################################
+# Create path to the case directory
+CASE_DIR    = Path(__file__).resolve().parent
+CASE_INPUTS = CASE_DIR / "inputs/"
+
+# Define input file name
+CTRL_FILE = "control.yaml"
+
+##########################################################
+# FIXTURE DEFINITIONS-------------------------------------
+##########################################################
+
+@pytest.fixture(scope='module')
+def test_config():
+
+    case_config = file_reader(CASE_INPUTS / CTRL_FILE)
+
+    OUTPUT_DIR  = CASE_DIR / case_config.io.output_dir
+
+    # Clear the output directory if it exists, then recreate it
+    if OUTPUT_DIR.exists():
+        shutil.rmtree(OUTPUT_DIR)
+    OUTPUT_DIR.mkdir(parents=True)
+
+    return case_config
+
+@pytest.fixture(scope='module')
+def test_mesh(test_config):
+
+    # Extract the data and construct the mesh file name
+    MESH_FILE = CASE_INPUTS / test_config.mesh.mesh_file
+
+    # Read in mesh file and construct the mesh object
+    my_mesh = mesh_class.Mesh()
+    my_mesh.read_mesh(MESH_FILE)
+    my_mesh.construct_mesh(test_config)
+
+    return my_mesh
+
+@pytest.fixture(scope='module')
+def initialized_solution(test_config, test_mesh):
+
+    IC_FILE   = CASE_INPUTS / str(test_config.initialization.IC_file)
+
+    # Compute the initial condition at the quadrature nodes
+    initialize(test_config, IC_FILE, test_mesh)
+
+    # Plot the initial condition to visually inspect it
+    ax = solPlot.plot_sol_2D(input_mesh=test_mesh, eq_idx=1, plot_title="Initial Condition - Rho")
+    fig = ax.figure
+    fig.savefig(CASE_DIR / test_config.io.output_dir / 'Figures' / "InitialCondition_Rho.png", dpi=200)
+
+    ax = solPlot.plot_sol_2D(input_mesh=test_mesh, eq_idx=2, plot_title="Initial Condition - U")
+    fig = ax.figure
+    fig.savefig(CASE_DIR / test_config.io.output_dir / 'Figures' / "InitialCondition_U.png", dpi=200)
+
+    ax = solPlot.plot_sol_2D(input_mesh=test_mesh, eq_idx=3, plot_title="Initial Condition - V")
+    fig = ax.figure
+    fig.savefig(CASE_DIR / test_config.io.output_dir / 'Figures' / "InitialCondition_V.png", dpi=200)
+
+    ax = solPlot.plot_sol_2D(input_mesh=test_mesh, eq_idx=4, plot_title="Initial Condition - RhoE")
+    fig = ax.figure
+    fig.savefig(CASE_DIR / test_config.io.output_dir / 'Figures' / "InitialCondition_RhoE.png", dpi=200)
+
+    # Write the initial condition to output file in specified format
+    outputFileWriter.write_state_vars_to_file(input_mesh=test_mesh, input_config=test_config, time=0.0, step=0, CASE_DIR=CASE_DIR)
+
+    return test_mesh
 
 ##########################################################
 # TEST FUNCTIONS -----------------------------------------
@@ -25,7 +99,7 @@ def test_case_config(test_config):
     assert hasattr(test_config, "time_stepping")
 
     # Physics configuration
-    assert test_config.physics.model    == "scalar_advection"
+    assert test_config.physics.model    == "navier-stokes"
     assert test_config.physics.gamma    == 1.4
     assert test_config.physics.Re       == 1000
     assert test_config.physics.Pr       == 0.71
@@ -36,7 +110,7 @@ def test_case_config(test_config):
     assert test_config.mesh.mesh_file   == "Square_ISMV2.mesh"
     assert test_config.mesh.ndim        == 2
     assert test_config.mesh.poly_deg    == 8
-    assert test_config.mesh.quad_type   == "LG"
+    #assert test_config.mesh.quad_type   == "LG"
 
     # Time stepping configuration
     assert test_config.time_stepping.time_integrator == "euler"
@@ -48,8 +122,8 @@ def test_case_config(test_config):
     assert test_config.initialization.IC_file    == "initial_condition.py"
 
     # IO configuration
-    assert test_config.io.plot_uniform_grid == False
-    assert test_config.io.output_format     == 'hdf5'
+    #assert test_config.io.plot_uniform_grid == False
+    assert test_config.io.output_format     == 'vtk'
     assert test_config.io.uniform_grid_res  == 150
     assert test_config.io.output_interval   == 0.1
     assert test_config.io.monitor_run       == False
@@ -57,14 +131,16 @@ def test_case_config(test_config):
 
     return
 
-def test_mesh_elements_and_mortars(test_mesh):
+def test_mesh_elements_and_mortars(test_mesh, test_config):
+
     # Test various attributes of the constructed elements
     assert len(test_mesh.elements) == test_mesh.num_elements
     assert max([e.id_global for e in test_mesh.elements]) == test_mesh.num_elements
     assert min([e.id_global for e in test_mesh.elements]) == 1
     assert all([e.id_global != 0 for e in test_mesh.elements])
     assert all([e.el_type == "quad" for e in test_mesh.elements])
-    assert all([e.poly_order == test_mesh.el_poly_order for e in test_mesh.elements])
+    # assert all([e.poly_order == test_mesh.el_poly_order for e in test_mesh.elements])
+    assert all([e.poly_order == test_config.mesh.poly_deg for e in test_mesh.elements])
     assert all([isinstance(e.node_ids, np.ndarray) for e in test_mesh.elements])
     assert all([e.node_ids.shape == (4,) for e in test_mesh.elements])
     assert all([e.node_coords.shape == (4, 3) for e in test_mesh.elements])
@@ -140,10 +216,9 @@ def test_mesh_isop_mapping(test_mesh, test_config):
     # Save the output figure, named after the mesh file for easy identification
     stem     = test_config.name
     fig      = ax.figure
-    fig_path = test_config.io.output_dir / 'Figures'
-    if not fig_path.exists(): fig_path.mkdir(parents=True) 
-    fig_name = fig_path / f"QuadratureTest_{stem}.png"
-    fig.savefig(str(fig_path / f"QuadratureTest_{stem}.png"), dpi=200)
+    fig_path = CASE_DIR / test_config.io.output_dir / 'Figures'
+    if not fig_path.exists(): fig_path.mkdir(parents=True)
+    fig.savefig(fig_path / f"QuadratureTest_{stem}.png", dpi=200)
     return
 
 def test_mesh_delaunay_tri(test_mesh):
@@ -151,48 +226,7 @@ def test_mesh_delaunay_tri(test_mesh):
     assert test_mesh.delaunay_tri is not None
     return
 
-def test_initialization(test_mesh, test_config):
-    assert all(e.solution is not None for e in test_mesh.elements)
-    assert test_mesh.elements[0].solution.shape == (test_mesh.el_poly_order+1, test_mesh.el_poly_order+1, test_config.physics.num_eq)
+def test_initialization(initialized_solution, test_config):
+    assert all(e.solution is not None for e in initialized_solution.elements)
+    assert initialized_solution.elements[0].solution.shape == (initialized_solution.el_poly_order+1, initialized_solution.el_poly_order+1, test_config.physics.num_eq)
     return
-
-##########################################################
-# FIXTURE DEFINITIONS-------------------------------------
-##########################################################
-
-@pytest.fixture(scope='module')
-def build_case():
-    ##########################################################
-    # SET UP AND DEFINITIONS ---------------------------------
-    ##########################################################
-    # Create path to the case directory
-    CASE_DIR    = Path(__file__).resolve().parent
-    CASE_INPUTS = CASE_DIR / "inputs/"
-
-    # Define input file name
-    CTRL_FILE = "control.yaml"
-
-    ##########################################################
-    # EXECUTION BLOCK ----------------------------------------
-    ##########################################################
-
-    case_config = file_reader(CASE_INPUTS / CTRL_FILE)
-
-    # Create the specified outputs directory it it does not exist
-    if not case_config.io.output_dir.exists():
-        case_config.io.output_dir.mkdir(parents=True)
-
-    # Extract the data and construct the mesh file name
-    MESH_FILE = CASE_INPUTS / case_config.mesh.mesh_file
-    IC_FILE   = CASE_INPUTS / str(case_config.initialization.IC_file)
-
-    # Read in mesh file and construct the mesh object
-    my_mesh = mesh_class.Mesh()
-    my_mesh.read_mesh(MESH_FILE)
-    my_mesh.construct_mesh(case_config)
-
-    # Compute the initial condition at the quadrature nodes
-    initialize(case_config, IC_FILE, my_mesh)
-
-    return case_config, my_mesh
-

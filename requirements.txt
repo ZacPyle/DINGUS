@@ -10,6 +10,7 @@ cycler==0.12.1
 distlib==0.4.0
 filelock==3.20.0
 fonttools==4.60.1
+h5py==3.16.0
 identify==2.6.15
 iniconfig==2.3.0
 isort==7.0.0

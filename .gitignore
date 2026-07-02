@@ -13,3 +13,7 @@ dist/
 out/
 tests/testOutputs/
 *.code-workspace
+*.png
+*.vtk
+*.hdf5
+*.xmf

@@ -365,13 +365,23 @@ class Mesh:
         ])
 
         # If Legendre-Gauss-Lobatto (LGL) quadrature is used instead of Legendre-Gauss (LG) then duplicate
-        # quadrature nodes exist on element boundaries. De-dupe them to prevent 
+        # quadrature nodes exist on element boundaries. De-dupe them to prevent doubled nodes (and doubled
+        # solution values) at shared interfaces, which would corrupt post-processing derivatives.
+        #
+        # A shared interface node is computed independently by each adjacent element's isoparametric map,
+        # so the two copies can differ at the ~1e-16 rounding level. An exact np.unique() therefore misses
+        # them; quantize to a length-scale-relative tolerance first so physically-coincident nodes collapse.
         if self.quad_type == "LGL":
-            _, unique_idx = np.unique(all_coords, axis=0, return_index=True)
+            scale         = np.linalg.norm(all_coords.max(axis=0) - all_coords.min(axis=0))
+            tol           = 1e-8 * scale
+            _, unique_idx = np.unique(np.round(all_coords / tol), axis=0, return_index=True)
+            unique_idx    = np.sort(unique_idx)   # preserve original element-stacked node ordering
+            self.delaunay_unique_idx = unique_idx
             unique_coords = all_coords[unique_idx]
-        else: 
+        else:
             unique_coords  = all_coords
 
         # Create and save the Delaunay triangulation
-        self.delaunay_coords = unique_coords
-        self.delaunay_tri    = Delaunay(unique_coords)
+        self.delaunay_coords     = unique_coords
+        self.delaunay_tri        = Delaunay(unique_coords)
+        

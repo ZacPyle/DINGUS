@@ -1,12 +1,12 @@
 # Speicify the case name. This is primarily used for output and origanization.
-name: "test_case_scalar_advection"
+name: "test_case_advection"
 
 # Specify the physics-specific parameters.
 physics:
-  model    : "scalar_advection"  # PDE(s) you wish to approximate. 
+  model    : "navier-stokes"  # PDE(s) you wish to approximate. 
   gamma    : 1.4                 # Ratio of specific heats
   Re       : 1000                # Reynolds number (if applicable)
-  #Pr       : 0.71                # Prandtl number (if applicable)
+  Pr       : 0.71                # Prandtl number (if applicable)
   mach_ref : 1.0                 # Reference Mach number (if applicable)
 
 # Specify the mesh-specific parameters.
@@ -32,6 +32,6 @@ initialization:
 io:
   output_dir        : './outputs/'
   plot_uniform_grid : False
-  output_format     : 'hdf5'
+  output_format     : 'vtk'
   output_interval   : 0.1
   monitor_run       : False

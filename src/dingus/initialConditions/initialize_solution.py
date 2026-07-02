@@ -36,7 +36,7 @@ def _load_ic_module(IC_file: Path):
 
     return module
 
-def _call_ic_function(ic_func, coords: np.ndarray) -> np.ndarray:
+def _call_ic_function(ic_func, coords: np.ndarray, case_config: CaseCfg) -> np.ndarray:
     """
     Call the user-defined initial condition function at the specified coordinates (should be quadrature nodes). This wrapper function
     if defined so the dimensionality of the input coordinates and initial_condition() function can be handled flexibly. For example,
@@ -44,21 +44,21 @@ def _call_ic_function(ic_func, coords: np.ndarray) -> np.ndarray:
     as input arguments. 
 
     The dimensionality handling is based on the signature of initial_condition(). Accepted signatures are:
-    - initial_condition(x)        - for 1D cases
-    - initial_condition(x, y)     - for 2D cases
-    - initial_condition(x, y, z)  - for 3D cases
+    - initial_condition(case_config, x)        - for 1D cases
+    - initial_condition(case_config, x, y)     - for 2D cases
+    - initial_condition(case_config, x, y, z)  - for 3D cases
     """
 
     params   = inspect.signature(ic_func).parameters
     n_params = len(params)
     
     match n_params:
-        case 1:
-            return ic_func(coords[...,0]) # Pass x-coordinates only
         case 2:
-            return ic_func(coords[...,0], coords[...,1]) # Pass x and y coordinates
+            return ic_func(case_config, coords[...,0]) # Pass x-coordinates only
         case 3:
-            return ic_func(coords[...,0], coords[...,1], coords[...,2]) # Pass x, y, and z coordinates
+            return ic_func(case_config, coords[...,0], coords[...,1]) # Pass x and y coordinates
+        case 4:
+            return ic_func(case_config, coords[...,0], coords[...,1], coords[...,2]) # Pass x, y, and z coordinates
         case _:
             raise TypeError(
                 f"'initial_condition' must accept 1, 2, or 3 positional arguments "
@@ -90,11 +90,11 @@ def initialize(case_config: CaseCfg, IC_FILE: Path, my_mesh: mesh_class.Mesh) ->
         raise ValueError(f"Unsupported IC_method: '{IC_method}'. Supported methods are: 'analytical', 'datafile', and 'restart',")
 
     # Call appropriate function to compute the initial condition based on user-defined method
-    IC_DISPATCH[IC_method](IC_FILE, my_mesh)
+    IC_DISPATCH[IC_method](IC_FILE, my_mesh, case_config)
     
     return
 
-def IC_from_function(IC_file: Path, my_mesh: mesh_class.Mesh):
+def IC_from_function(IC_file: Path, my_mesh: mesh_class.Mesh, case_config: CaseCfg):
     """
     Load a user-defined function from an initial_condition.py file. This function may be a simple mathematical function (e.g., sin(2*pi*x)),
     or a more complex logic-based function. 
@@ -109,7 +109,7 @@ def IC_from_function(IC_file: Path, my_mesh: mesh_class.Mesh):
 
     # Check that the mesh dimensionality and initial condition function are compatible.
     mesh_dim = my_mesh.dim
-    ic_dim   = len(inspect.signature(ic_func).parameters)
+    ic_dim   = len(inspect.signature(ic_func).parameters)-1  # Ignore the CaseCfg input to the IC function
     if mesh_dim < ic_dim:
         raise ValueError(
             f"Initial condition function expects {ic_dim} input arguments, but mesh is only {mesh_dim}D. "
@@ -123,16 +123,16 @@ def IC_from_function(IC_file: Path, my_mesh: mesh_class.Mesh):
     # Call the user-defined initial condition function at the quadrature nodes to initialize the solution
     for e in my_mesh.elements:
         coords     = e.quad_node_coords
-        e.solution = _call_ic_function(ic_func, coords)
+        e.solution = _call_ic_function(ic_func, coords, case_config)
 
     return
 
-def IC_from_data_file(IC_file: Path, my_mesh: mesh_class.Mesh):
+def IC_from_data_file(IC_file: Path, my_mesh: mesh_class.Mesh, case_config: CaseCfg):
     # TODO: Implement IC_from_data_file() 
     raise NotImplementedError("IC_from_data_file() is not implemented yet.")
     return
 
-def IC_from_restart(IC_file: Path, my_mesh: mesh_class.Mesh):
+def IC_from_restart(IC_file: Path, my_mesh: mesh_class.Mesh, case_config: CaseCfg):
     # TODO: Implement IC_from_restart()
     raise NotImplementedError("IC_from_restart() is not implemented yet.")
     return
