@@ -13,7 +13,7 @@ physical domain in each element. All mapping functions are dervived from Chapter
 Kopriva's "Implementing Spectral Methods for Partial Differential Equations".
 '''
 
-def isop_map_1d(myMesh: 'mesh_class.Mesh', e: 'element_class.SpectralElement') -> None:
+def _isop_map_1d(myMesh: 'mesh_class.Mesh', e: 'element_class.SpectralElement') -> None:
     '''
     Map quadrature nodes from [-1, 1] to an arbitrary 1D range.
 
@@ -40,7 +40,7 @@ def isop_map_1d(myMesh: 'mesh_class.Mesh', e: 'element_class.SpectralElement') -
     # compute 1D mapping; no need for matrix multiplication in this simple case
     e.quad_node_coords = N1 * corners[0,0] + N2 * corners[1,0]
 
-def isop_map_2d(myMesh: 'mesh_class.Mesh', e: 'element_class.SpectralElement') -> None:
+def _isop_map_2d(myMesh: 'mesh_class.Mesh', e: 'element_class.SpectralElement') -> None:
     '''
     Map quadrature nodes from [-1, 1]^2 to an arbitrary 2D range.
 
@@ -76,7 +76,7 @@ def isop_map_2d(myMesh: 'mesh_class.Mesh', e: 'element_class.SpectralElement') -
     # coordinates of quadrature nodes
     e.quad_node_coords = N @ corners
 
-def isop_map_3d(myMesh: 'mesh_class.Mesh', e: 'element_class.SpectralElement') -> None:
+def _isop_map_3d(myMesh: 'mesh_class.Mesh', e: 'element_class.SpectralElement') -> None:
     '''
     Map quadrature nodes from [-1, 1]^3 to an arbitrary 3D range.
 
@@ -307,9 +307,10 @@ def compute_jacobian_metrics_1d(e: 'element_class.SpectralElement') -> None:
     JInv = 1.0 / JDet
 
     # Save the Jacobian metrics to the element object
-    e.jacobian     = J
-    e.jacobian_det = JDet
-    e.jacobian_inv = JInv
+    e.jacobian         = J
+    e.jacobian_det     = JDet
+    e.jacobian_inv     = JInv
+    e.jacobian_det_inv = 1.0 / JDet
 
 def compute_jacobian_metrics_2d(e: 'element_class.SpectralElement') -> None:
     '''
@@ -363,9 +364,11 @@ def compute_jacobian_metrics_2d(e: 'element_class.SpectralElement') -> None:
     JInv[..., 1, 1] =  dXdXi  / JDet
 
     # Save the Jacobian metrics to the element object
-    e.jacobian     = J
-    e.jacobian_det = JDet
-    e.jacobian_inv = JInv
+    e.jacobian         = J
+    e.jacobian_det     = JDet
+    e.jacobian_inv     = JInv
+    e.jacobian_det_inv = 1.0 / JDet
+    
 
 def compute_jacobian_metrics_3d(e: 'element_class.SpectralElement') -> None:
     '''
@@ -416,9 +419,10 @@ def compute_jacobian_metrics_3d(e: 'element_class.SpectralElement') -> None:
     JInv = np.linalg.inv(J)
 
     # Save the Jacobian metrics to the element object
-    e.jacobian     = J
-    e.jacobian_det = JDet
-    e.jacobian_inv = JInv
+    e.jacobian         = J
+    e.jacobian_det     = JDet
+    e.jacobian_inv     = JInv
+    e.jacobian_det_inv = 1.0 / JDet
 
 def compute_covariant_and_contravariant_vectors_1d(e: 'element_class.SpectralElement') -> None:
     '''
@@ -611,7 +615,7 @@ def compute_normals_2d(myMesh : 'mesh_class.Mesh') -> None:
         contravar_xi  is normal to xi  = const faces (left/right faces: 4 and 2)
         contravar_eta is normal to eta = const faces (bottom/top faces: 1 and 3)
 
-    Array index convention: [i, j] = (xi_i, eta_j), consistent with isop_map_2d broadcasting.
+    Array index convention: [i, j] = (xi_i, eta_j), consistent with _isop_map_2d broadcasting.
 
     Interior normals stored on each element:
         e.normal_xi  : shape (P+1, P+1, 2) — unit normals to xi  = const surfaces
@@ -713,7 +717,7 @@ def compute_normals_3d(myMesh : 'mesh_class.Mesh') -> None:
         contravar_eta  is normal to eta  = const faces (faces: 1 and 2)
         contravar_zeta is normal to zeta = const faces (faces: 3 and 5)
 
-    Array index convention: [i, j, k] = (xi_i, eta_j, zeta_k), consistent with isop_map_3d broadcasting.
+    Array index convention: [i, j, k] = (xi_i, eta_j, zeta_k), consistent with _isop_map_3d broadcasting.
 
     Interior normals stored on each element:
         e.normal_xi  : shape (P+1, P+1, P+1, 3) unit normals to xi   = const surfaces

@@ -39,7 +39,7 @@ class SpectralElement:
         # Boundary condition information
         self.boundary_condition_names = np.array([])
 
-        # Boundayr curvature information
+        # Boundary curvature information
         self.mortar_curvature = np.array([])
 
         # Spectral data (to be initialized later)
@@ -48,6 +48,7 @@ class SpectralElement:
         self.jacobian          = np.array([])
         self.jacobian_inv      = np.array([])
         self.jacobian_det      = np.array([])
+        self.jacobian_det_inv  = np.array([])
         self.covar_xi          = np.array([])
         self.covar_eta         = np.array([])
         self.covar_zeta        = np.array([])

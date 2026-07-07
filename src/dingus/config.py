@@ -1,9 +1,10 @@
 # src/dingus/config.py
+import numpy as np
 import warnings
 import yaml
 from datetime import datetime
 from pathlib import Path
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing import Any, List, Literal, Dict,  Optional
 
 # Helper functions ########################################################################
@@ -19,6 +20,7 @@ def default_case_name() -> str:
 
 # Configuration classes ###################################################################
 class PhysicsCfg(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     # Define the parameters for physics modeling
     model     : Literal['scalar_advection',                               # Physics model / governing equations
                         'euler', 
@@ -40,6 +42,18 @@ class PhysicsCfg(BaseModel):
     num_eq    : Optional[int]               = Field(None,  gt = 0.0,       # Number of governing equations (determined automatically based on selected physics model and dimensionality)
                                                     description='Number of governing equations. This is determined automatically based on the selected physics model and dimensionality.')
     
+    advection_velocity : Optional[np.ndarray] = Field(None, description='Advection velocity vector for scalar_advection models. Must be explicitly set when using scalar_advection.')
+
+    riemann_solver     : Literal['upwind',
+                                 'LLF'   ,
+                                 'roe'   ]    = Field('LLF', description='Riemann solver to use for flux computations. Default is "LLF".')
+    
+    # Create a validator to coerce the advection_velocity field into a numpy array if it is provided as a list or other iterable.
+    @field_validator('advection_velocity', mode='before')
+    @classmethod
+    def _coerce_advection_velocity(cls, v):
+        return np.asarray(v, dtype=float) if v is not None else v
+
     # Create a validator to print errors and warnings related to the selected physics parameters.
     @model_validator(mode='after')
     def check_physics_params(self) -> 'PhysicsCfg':
@@ -58,6 +72,10 @@ class PhysicsCfg(BaseModel):
 
         if 'gamma' not in self.model_fields_set:
             warnings.warn("gamma (ratio of specific heats) not specified. Defaulting to gamma = 1.4.")
+
+        if 'riemann_solver' not in self.model_fields_set:
+            warnings.warn("riemann_solver not specified. Defaulting to 'LLF' (local Lax-Friedrichs / Rusanov).")
+
         return self
 
 class MeshCfg(BaseModel):
@@ -229,6 +247,12 @@ class CaseCfg(BaseModel):
                 self.io.output_dir = f"./Output_{self.name}/"
             else:
                 self.io.output_dir = f"./Output_{default_case_name()}/"
+
+        # Assign advection_velocity if not explicitly set for scalar_advection model. This must be done AFTER dimensionality is known, so it is done here in the CaseCfg validator.
+        if self.physics.model == 'scalar_advection' and self.physics.advection_velocity is None:
+            warnings.warn("advection_velocity not specified for scalar_advection model. Defaulting to 1D advection in the x-direction: [1.0, ..., 0.0].")
+            self.physics.advection_velocity    = np.zeros(ndim)
+            self.physics.advection_velocity[0] = 1.0
 
         return self
 

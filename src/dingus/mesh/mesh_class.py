@@ -1,4 +1,5 @@
 # src/dingus/mesh/mesh_class.py
+import dingus.coreNumerics.interpolation as interpolation
 import dingus.coreNumerics.mapping as mapping
 import dingus.coreNumerics.quadrature as quadrature
 import dingus.mesh.hohqmesh_handler as hohqmesh
@@ -23,18 +24,21 @@ class Mesh:
 
     def __init__(self) -> None:
         # Instantiate empty attributes
-        self.dim           : int = 2
-        self.el_poly_order : int = 0
-        self.elements      : List['element_class.SpectralElement'] = []
-        self.mesh_format   : str = ""
-        self.mortars       : List['mortar_class.SpectralMortar'  ] = []
-        self.num_elements  : int = 0
-        self.num_mortars   : int = 0
-        self.num_nodes     : int = 0
-        self.quad_nodes    : np.ndarray = np.array([])
-        self.quad_weights  : np.ndarray = np.array([])
-        self.quad_type     : str = ""
-        self.raw_data      : Dict[str, Any] = {}
+        self.deriv_mat        : np.ndarray = np.array([])
+        self.dim              : int = 2
+        self.el_poly_order    : int = 0
+        self.elements         : List['element_class.SpectralElement'] = []
+        self.face_interp_min  : np.ndarray = np.array([])
+        self.face_interp_max  : np.ndarray = np.array([])
+        self.mesh_format      : str = ""
+        self.mortars          : List['mortar_class.SpectralMortar'  ] = []
+        self.num_elements     : int = 0
+        self.num_mortars      : int = 0
+        self.num_nodes        : int = 0
+        self.quad_nodes       : np.ndarray = np.array([])
+        self.quad_weights     : np.ndarray = np.array([])
+        self.quad_type        : str = ""
+        self.raw_data         : Dict[str, Any] = {}
 
     def read_mesh(self, fileName: Union[str, Path]) -> None:
         """
@@ -232,10 +236,20 @@ class Mesh:
 
         # Compute Delaunay triangulation for uniform plotting if desired
         self.build_delaunay_tri()
+
+        # Compute the polynomial derivative matrix. Recall the derivative matrix is the same
+        # for all elements, so we compute it once and save it to the mesh object rather than
+        # to individual element objects.
+        self.deriv_mat = interpolation.Polynomial_Derivative_Matrix(self.quad_nodes)
+
+        # Compute the face interpolation matrices for each element if using LG quadrature.
+        # Again, these are the same for all elements so they are computes once and stored
+        # in the mesh object rather than in each element object.
+        self.face_interp_min = interpolation.Polynomial_Interpolation_Matrix(self.quad_nodes, np.array([-1]))
+        self.face_interp_max = interpolation.Polynomial_Interpolation_Matrix(self.quad_nodes, np.array([ 1]))
         
         # self.apply_mortar_curvature()
         # self.apply_boundary_conditions()
-        
 
     def compute_element_metrics(self) -> None:
         """
@@ -261,9 +275,9 @@ class Mesh:
 
         # Create a dispatch dictionary to call appropriate mapping funciton based on dimensionality.
         MAPPING_DISPATCH = {
-            1: mapping.isop_map_1d,
-            2: mapping.isop_map_2d,
-            # 3: mapping.isop_map_3d,
+            1: mapping._isop_map_1d,
+            2: mapping._isop_map_2d,
+            # 3: mapping._isop_map_3d,
         }
         if self.dim not in MAPPING_DISPATCH:
             raise NotImplementedError(f"Isoparametric mapping not implemented for dimensionality: {self.dim}")

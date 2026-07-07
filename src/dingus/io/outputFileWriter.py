@@ -263,7 +263,6 @@ def _write_hdf5(case_name: str,
         # Write each solution variable
         sol_grp = hf.create_group('Solution')
         for idx, name in enumerate(output_var_names):
-            #breakpoint()
             sol_grp.create_dataset(name, data=all_solutions[:, idx], compression='gzip')
 
         # Connectivity (per-element quad cells, preserves DG structure)
@@ -374,7 +373,10 @@ def write_state_vars_to_file(input_mesh: 'mesh_class.Mesh',
         2: ["Rho", "U", "V",      "P", "T"],
         3: ["Rho", "U", "V", "W", "P", "T"]
     }
-    var_names = STATE_VAR_NAMES[input_mesh.dim]
+    if input_config.physics.model == "scalar_advection":
+        var_names = ["Phi"]
+    else:
+        var_names = STATE_VAR_NAMES[input_mesh.dim]
 
     # Extract the coordinate data from all quadrature nodes across all elements and reshape into a 2D array of shape (num_nodes, dim)
     all_coords = np.vstack([
