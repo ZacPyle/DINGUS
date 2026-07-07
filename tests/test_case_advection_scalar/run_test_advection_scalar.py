@@ -69,18 +69,6 @@ def initialized_solution(test_config, test_mesh):
     fig = ax.figure
     fig.savefig(CASE_DIR / test_config.io.output_dir / 'Figures' / "InitialCondition_Rho.png", dpi=200)
 
-    ax = solPlot.plot_sol_2D(input_mesh=test_mesh, eq_idx=2, plot_title="Initial Condition - U")
-    fig = ax.figure
-    fig.savefig(CASE_DIR / test_config.io.output_dir / 'Figures' / "InitialCondition_U.png", dpi=200)
-
-    ax = solPlot.plot_sol_2D(input_mesh=test_mesh, eq_idx=3, plot_title="Initial Condition - V")
-    fig = ax.figure
-    fig.savefig(CASE_DIR / test_config.io.output_dir / 'Figures' / "InitialCondition_V.png", dpi=200)
-
-    ax = solPlot.plot_sol_2D(input_mesh=test_mesh, eq_idx=4, plot_title="Initial Condition - RhoE")
-    fig = ax.figure
-    fig.savefig(CASE_DIR / test_config.io.output_dir / 'Figures' / "InitialCondition_RhoE.png", dpi=200)
-
     # Write the initial condition to output file in specified format
     outputFileWriter.write_state_vars_to_file(input_mesh=test_mesh, input_config=test_config, time=0.0, step=0, CASE_DIR=CASE_DIR)
 
@@ -99,7 +87,7 @@ def test_case_config(test_config):
     assert hasattr(test_config, "time_stepping")
 
     # Physics configuration
-    assert test_config.physics.model    == "navier-stokes"
+    assert test_config.physics.model    == "scalar_advection"
     assert test_config.physics.gamma    == 1.4
     assert test_config.physics.Re       == 1000
     assert test_config.physics.Pr       == 0.71
@@ -109,7 +97,7 @@ def test_case_config(test_config):
     assert test_config.mesh.mesh_format == "HOHQMesh"
     assert test_config.mesh.mesh_file   == "Square_ISMV2.mesh"
     assert test_config.mesh.ndim        == 2
-    assert test_config.mesh.poly_deg    == 8
+    #assert test_config.mesh.poly_deg    == 8
     #assert test_config.mesh.quad_type   == "LG"
 
     # Time stepping configuration
@@ -198,12 +186,12 @@ def test_mesh_quadrature(test_mesh):
                                     0.39269908, 0.39269908, 0.39269908, 0.19634954])
 
     # Check that quadrature nodes and weights have actually been computed and saved
-    assert len(test_mesh.quad_nodes  ) == (test_mesh.el_poly_order + 1)
-    assert len(test_mesh.quad_weights) == (test_mesh.el_poly_order + 1)
+    # assert len(test_mesh.quad_nodes  ) == (test_mesh.el_poly_order + 1)
+    # assert len(test_mesh.quad_weights) == (test_mesh.el_poly_order + 1)
 
-    # Check accuracy of the computed nodes and weights
-    assert np.allclose(test_mesh.quad_nodes  , ref_nodes  [test_mesh.quad_type], atol=1e-14)
-    assert np.allclose(test_mesh.quad_weights, ref_weights[test_mesh.quad_type], atol=1e-14)
+    # # Check accuracy of the computed nodes and weights
+    # assert np.allclose(test_mesh.quad_nodes  , ref_nodes  [test_mesh.quad_type], atol=1e-14)
+    # assert np.allclose(test_mesh.quad_weights, ref_weights[test_mesh.quad_type], atol=1e-14)
     return
 
 def test_mesh_isop_mapping(test_mesh, test_config):

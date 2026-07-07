@@ -30,7 +30,7 @@ def mesh_fixture(request):
 
     return m, mesh_file
 
-def test_isop_map_2d(mesh_fixture):
+def test__isop_map_2d(mesh_fixture):
     '''
     Tests the isoparametric mapping of quadrature nodes from the reference element [-1, 1] to
     an arbitrary 1D range within each element.

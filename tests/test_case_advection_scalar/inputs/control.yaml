@@ -3,18 +3,19 @@ name: "test_case_advection"
 
 # Specify the physics-specific parameters.
 physics:
-  model    : "navier-stokes"  # PDE(s) you wish to approximate. 
+  model    : "scalar_advection"  # PDE(s) you wish to approximate. 
   gamma    : 1.4                 # Ratio of specific heats
   Re       : 1000                # Reynolds number (if applicable)
   Pr       : 0.71                # Prandtl number (if applicable)
   mach_ref : 1.0                 # Reference Mach number (if applicable)
+  advection_velocity: [1.0, 0.0] # Advection velocity vector for scalar_advection models.
 
 # Specify the mesh-specific parameters.
 mesh:
   mesh_format: "HOHQMesh"           # Format the mesh file is written in
   mesh_file  : "Square_ISMV2.mesh"  # Mesh file name (including the path if not in the same directory as this input file)
   ndim       : 2                    # Spatial dimensionality of the problem (1, 2, or 3)
-  poly_deg   : 8                    # Polynomial degree for solution approximation within each element
+  poly_deg   : 18                    # Polynomial degree for solution approximation within each element
   quad_type  : "LG"                 # Quadrature type: Legendre-Gauss (LG) or Legendre-Gauss-Lobatto (LGL)
 
 # Specify the time-stepping-specific parameters.
