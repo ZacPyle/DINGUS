@@ -18,3 +18,4 @@ tests/testOutputs/
 *.vtu
 *.hdf5
 *.xmf
+*.pvd
