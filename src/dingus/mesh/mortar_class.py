@@ -40,7 +40,8 @@ class SpectralMortar:
         self.mortar_curvature  = None
 
         # Boundary condition information
-        self.bc_name           = str
+        self.boundary_condition_name = None
+        self.boundary_condition      = None
 
         # Spectral data (to be initialized later)
         self.quad_node_coords = None

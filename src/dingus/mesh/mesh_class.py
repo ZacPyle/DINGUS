@@ -197,9 +197,9 @@ class Mesh:
             # RIGHT element id = 0, that means the LEFT element is physical and contains the BC information; if
             # the LEFT element id = 0, that means the RIGHT element is physical contains the BC information.
             if el_id_left == 0:
-                mort.bc_name = self.elements[el_id_right-1].boundary_condition_names[abs(el_face_right)-1]
+                mort.boundary_condition_name = self.elements[el_id_right-1].boundary_condition_names[abs(el_face_right)-1]
             if el_id_right == 0:
-                mort.bc_name = self.elements[el_id_left-1 ].boundary_condition_names[abs(el_face_left)-1 ]
+                mort.boundary_condition_name = self.elements[el_id_left-1 ].boundary_condition_names[abs(el_face_left)-1 ]
 
             # Create the face sign map for this mortar. This is an array containing the sign of the outward-facing normal
             # vector at each face of the element. 
@@ -207,14 +207,15 @@ class Mesh:
 
     def construct_mesh(self, case_config : CaseCfg) -> None:
         """
-        Constructs the mesh by calling the appropriate methods in the correct order. This is a wrapper function
-        that calls the following methods in order:
-            - self.construct_elements()
-            - self.construct_mortars()
-            - self.link_elements_and_mortars()
-            - self.compute_isoparametric_mapping()
-            - self.apply_mortar_curvature()
-            - self.apply_boundary_conditions()
+        Constructs the mesh by:
+        - creating each element object
+        - creating each mortar object
+        - linking mortars to proper elements
+        - computing the quadrature nodes and weights to span the [-1, 1]^d reference domain (assuming uniform polynomial order)
+        - computing the element metrics for every element
+        - building a delaunnay triangulation for IO interpolation / in-run plotting
+        - computing the derivative matrix and face interpolation matrices (used for all elements)
+        - assigning a BCCfg object to each boundary mortar
         """
 
         # TODO: Add the CaseCfg as an argument to this, then populate the mesh.quad_nodes type. This will allow
@@ -248,8 +249,10 @@ class Mesh:
         self.face_interp_min = interpolation.Polynomial_Interpolation_Matrix(self.quad_nodes, np.array([-1]))
         self.face_interp_max = interpolation.Polynomial_Interpolation_Matrix(self.quad_nodes, np.array([ 1]))
         
+        # Loop through the mortars and apply boundary conditions to the boundary mortars.
+        self.apply_boundary_conditions(case_config)
+
         # self.apply_mortar_curvature()
-        # self.apply_boundary_conditions()
 
     def compute_element_metrics(self) -> None:
         """
@@ -338,6 +341,18 @@ class Mesh:
             #     raise RuntimeError("Must call compute_jacobian_metrics() before compute_covariant_and_contravariant_vectors()!")
             VECTOR_DISPATCH     [self.dim](e)
 
+            # Compute the minimum length scale based on contravariant vectors for time stepping
+            match self.dim:
+                case 1:
+                    contravars = [e.contravar_xi]
+                case 2:
+                    contravars = [e.contravar_xi, e.contravar_eta]
+                case 3:
+                    contravars = [e.contravar_xi, e.contravar_eta, e.contravar_zeta]
+                case _:
+                    raise ValueError(f"Unsupported dimensionality detected during metric computation: {self.dim}.")
+            e.h_min = 1.0 / np.max(sum(np.linalg.norm(cv, axis=-1) for cv in contravars))
+            
         # Compute normals outside of previous loop because it requires looping through elements AND mortars.
         NORMALS_DISPATCH[self.dim](self)
     
@@ -349,13 +364,21 @@ class Mesh:
 
         raise NotImplementedError("Applying mortar curvature not implemented yet!")
     
-    def apply_boundary_conditions(self) -> None:
+    def apply_boundary_conditions(self, case_cfg : CaseCfg) -> None:
         """
         Applies boundary conditions to the mortars based on the information in self.raw_data.
         This MUST be called after self.construct_elements() and self.construct_mortars().
         """
 
-        raise NotImplementedError("Applying boundary conditions not implemented yet!")
+        # Extract the BC dictionary from the case configuration object
+        BCDict = case_cfg.boundary_conditions
+        for mortar in self.mortars:
+            if None not in mortar.connected_elements:   # Interior mortars (No BC)
+                continue
+            if not mortar.boundary_condition_name in BCDict:
+                raise ValueError(f"Boundary condition: '{mortar.boundary_condition_name}' found in {case_cfg.mesh.mesh_file} but not in the control file!")
+            mortar.boundary_condition = BCDict[mortar.boundary_condition_name]
+
     
     def build_delaunay_tri(self) -> None:
         """

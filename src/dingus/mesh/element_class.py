@@ -24,6 +24,7 @@ class SpectralElement:
                        ) -> None:
         
         # Basic information
+        self.h_min       = np.inf
         self.id_global   = element_id
         self.node_ids    = node_ids
         self.node_coords = node_coords

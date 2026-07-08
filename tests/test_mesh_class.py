@@ -148,9 +148,9 @@ def test_link_element_and_mortars(mesh_and_expected):
             f"Element {el.id_global} is missing a connected Mortar object!"
         
     # Test several mortars to see that the boundary conditions are properly extracted from the element objects
-    # assert test_mesh.mortars[0                   ].bc_name == exp["mort0_bc"]
-    # assert test_mesh.mortars[14                  ].bc_name == exp["mort14_bc"]
-    # assert test_mesh.mortars[-1].bc_name == exp["mort_last_bc"]
+    # assert test_mesh.mortars[0                   ].boundary_condition_name == exp["mort0_bc"]
+    # assert test_mesh.mortars[14                  ].boundary_condition_name == exp["mort14_bc"]
+    # assert test_mesh.mortars[-1].boundary_condition_name == exp["mort_last_bc"]
 
 # ---------- NOT IMPLEMENTED ---------------------
 # def test_apply_mortar_curvature(test_mesh : mesh_class.Mesh = my_mesh):

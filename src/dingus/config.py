@@ -154,6 +154,43 @@ class ICCfg(BaseModel):
 
         return self
     
+class BCCfg(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    # Define the parameters for a boundary condition. This class is intended to be used as a sub-model within the 
+    # CaseCfg class, where a list of BCCfg objects can be defined for each boundary in the simulation domain.
+    type : Literal['inflow'                 ,
+                   'outflow'                ,
+                   'periodic'               ,
+                   'adiabatic_slip_wall'    ,
+                   'adiabatic_no_slip_wall' ,
+                   'isothermal_slip_wall'   ,
+                   'isothermal_no_slip_wall',
+                   'constant_pressure'       ] = Field(... , description='Boundary condition type.')
+    
+    state   : Optional[np.ndarray]             = Field(None, description='Prescribed boundary state (solution values at boundary nodes).')
+
+    partner : Optional[str]                    = Field(None, description='Opposite / partner boundary name (used in periodic boundaries)')
+
+    @field_validator('state',mode='before')
+    @classmethod
+    def _coerce_state(cls, v):
+        # Force any boundary state to be read in as a numpy array.
+        return np.asarray(v, dtype=float) if v is not None else v
+
+    # Create a validator to print errors and warnings related to the selected BC parameters.
+    @model_validator(mode='after')
+    def check_BC_params(self) -> 'BCCfg':
+        # Errors ---------------------------------------------
+        if self.type == 'inflow' and self.state is None:
+            raise ValueError("Inflow boundary condition requires a 'state' to be assigned!")
+        
+        if self.type == 'periodic' and self.partner is None:
+            raise ValueError("Periodic boundary condition requires a 'partner' boundary to be assigned!")
+        
+        # Warnings -------------------------------------------
+
+        return self
+    
 class IOCfg(BaseModel):
     # Define the parameters for the IO configuration
     output_dir        : Path           = Field(Path('./outputs/'),
@@ -227,6 +264,9 @@ class CaseCfg(BaseModel):
     
     io             : IOCfg            = Field(default_factory=IOCfg,
                                               description='IO configuration. Requres inputs that must be explicitly set within the io block of the case YAML file.')
+    
+    boundary_conditions: Dict[str, BCCfg] = Field(default_factory=dict,
+                                                  description='Dictionary containing strings of the BCs present in the mesh file as keys and a BCCfg object as the value. E.g. "domain_left: {type: inflow, state: [0.0]]"')
     
     misc: Dict[str, Any]     = Field(default_factory=dict,                                 # Miscellaneous user-defined parameters.
         description="Optional miscellaneous user-defined parameters.")

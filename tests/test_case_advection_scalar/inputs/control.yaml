@@ -36,3 +36,10 @@ io:
   output_format     : 'vtk'
   output_interval   : 0.1
   monitor_run       : False
+
+# Specify the boundary condition dictionary
+boundary_conditions:
+  Bottom : {type: outflow}
+  Right  : {type: outflow}
+  Top    : {type: outflow}
+  Left   : {type: outflow} 
