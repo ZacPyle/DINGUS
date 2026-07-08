@@ -15,7 +15,7 @@ def initial_condition(case_config: CaseCfg, x, y):
 
     # Create parameters for a gaussian distribution, centered on pi
     sigma = 0.1
-    x0    = 0.25
+    x0    = 0.50
     y0    = 0.50   # Can be used for a 2D gaussian distribuation rather than a "spike"
 
     # Assign state variables for simple wave advection

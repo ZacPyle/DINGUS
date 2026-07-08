@@ -122,6 +122,9 @@ class TimeIntegratorCfg(BaseModel):
     cfl             : float                           = Field(..., gt=0.0, lt=1.0, # CFL number for stable time step calculations
                                                               description='CFL number for stable time step calculations. Must be explicitly set.')
     
+    start_time      : float                           = Field(0.0,                 # Start simulation time
+                                                              description='Start time for the simulation. Defaults to 0.0.')
+    
     final_time      : float                           = Field(..., gt=0.0,        # Final simulation time
                                                               description='End time for the simulation. Must be explicitly set.')
     
@@ -129,6 +132,10 @@ class TimeIntegratorCfg(BaseModel):
     @model_validator(mode='after')
     def check_time_params(self) -> 'TimeIntegratorCfg':
         # Errors ---------------------------------------------
+
+        # Warnings ---------------------------------------------
+        if self.start_time not in self.model_fields_set:
+            warnings.warn("No start_time was set in the control file, defaulting to start_time = 0.0")
 
         return self
     

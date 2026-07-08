@@ -423,3 +423,39 @@ def write_state_vars_to_file(input_mesh: 'mesh_class.Mesh',
     # Write the solution data to output file in specified format.
     WRITER_DISPATCH[output_format](
         case_name, output_dir, time, step, out_coords, out_vars, var_names, out_connectivity)
+
+
+def write_pvd_collection(case_name: str, records: list, output_root: Path) -> None:
+    '''
+    Writes a ParaView `.pvd` collection file that maps each per-step `.vtu` to its true
+    SIMULATION TIME. This lets ParaView show real times (0.0, 0.02, ...) on the timeline while
+    the `.vtu` files keep clean, sortable `_step<NNNNNN>` names (decimal times in filenames break
+    ParaView's automatic time-series parsing, so the time lives in the collection instead).
+
+    Open the resulting `<case_name>.pvd` in ParaView instead of the folder; it also fixes the
+    ordering of interval-based output and ignores stale `.vtu` files from previous runs (only the
+    files listed here are loaded).
+
+    Inputs:
+    - case_name   : the case name (matches the `<case_name>_step<NNNNNN>.vtu` file prefix).
+    - records     : list of (time, step) tuples for every frame written so far.
+    - output_root : directory containing the `vtk/` folder; the `.pvd` is written here, and the
+                    `file="..."` paths inside it are relative to this location.
+
+    Outputs:
+    - None (writes `<output_root>/<case_name>.pvd`).
+    '''
+
+    lines = ['<?xml version="1.0"?>',
+             '<VTKFile type="Collection" version="0.1" byte_order="LittleEndian">',
+             '  <Collection>']
+
+    # One <DataSet> per frame: timestep is the real sim time; file is relative to the .pvd.
+    for time, step in records:
+        lines.append(
+            f'    <DataSet timestep="{time:.10g}" file="vtk/{case_name}_step{step:06d}.vtu"/>'
+        )
+
+    lines += ['  </Collection>', '</VTKFile>']
+
+    (Path(output_root) / f"{case_name}.pvd").write_text("\n".join(lines) + "\n")

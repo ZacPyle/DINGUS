@@ -15,5 +15,6 @@ tests/testOutputs/
 *.code-workspace
 *.png
 *.vtk
+*.vtu
 *.hdf5
 *.xmf

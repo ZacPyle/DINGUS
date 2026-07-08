@@ -270,8 +270,13 @@ def _compute_surface_2d(mesh, case_cfg: CaseCfg, t: float = 0.0) -> None:
 
             # Get or compute the exterior trace: q_plus
             if None in mort.connected_elements:
-                # boundary mortar, compute the ghost state from the BC dispatch
-                q_plus = exterior_state(mort, q_minus, case_cfg, t)
+                if mort.boundary_condition.type == 'periodic':
+                    # pull q_plus from the partner element across the domain (like an interior neighbor)
+                    q_plus = _prolong_to_face_2d(mort.periodic_partner_element.solution,
+                                                 mort.periodic_partner_face, I_min, I_max)
+                else:
+                    # boundary mortar, compute the ghost state from the BC dispatch
+                    q_plus = exterior_state(mort, q_minus, case_cfg, t)
             else:
                 # interior mortar, neighbor's trace at the SHARED face
                 neighbor      = right if (e is left) else left

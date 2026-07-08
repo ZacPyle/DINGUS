@@ -24,21 +24,67 @@ class Mesh:
 
     def __init__(self) -> None:
         # Instantiate empty attributes
-        self.deriv_mat        : np.ndarray = np.array([])
-        self.dim              : int = 2
-        self.el_poly_order    : int = 0
-        self.elements         : List['element_class.SpectralElement'] = []
-        self.face_interp_min  : np.ndarray = np.array([])
-        self.face_interp_max  : np.ndarray = np.array([])
-        self.mesh_format      : str = ""
-        self.mortars          : List['mortar_class.SpectralMortar'  ] = []
-        self.num_elements     : int = 0
-        self.num_mortars      : int = 0
-        self.num_nodes        : int = 0
-        self.quad_nodes       : np.ndarray = np.array([])
-        self.quad_weights     : np.ndarray = np.array([])
-        self.quad_type        : str = ""
-        self.raw_data         : Dict[str, Any] = {}
+        self.boundary_mortars         : List['mortar_class.SpectralMortar'  ] = []
+        self.deriv_mat                : np.ndarray = np.array([])
+        self.dim                      : int = 2
+        self.el_poly_order            : int = 0
+        self.elements                 : List['element_class.SpectralElement'] = []
+        self.face_interp_min          : np.ndarray = np.array([])
+        self.face_interp_max          : np.ndarray = np.array([])
+        self.mesh_format              : str = ""
+        self.mortars                  : List['mortar_class.SpectralMortar'  ] = []
+        self.num_elements             : int = 0
+        self.num_mortars              : int = 0
+        self.num_nodes                : int = 0
+        self.quad_nodes               : np.ndarray = np.array([])
+        self.quad_weights             : np.ndarray = np.array([])
+        self.quad_type                : str = ""
+        self.raw_data                 : Dict[str, Any] = {}
+
+    def _link_periodic_mortars(self) -> None:
+        '''
+        Pairs each periodic boundary mortar with its partner on the opposite boundary, so the DG
+        surface term can pull q_plus from the element ACROSS the domain (treating a periodic face
+        like an interior interface). Matching is by TRANSVERSE coordinate: a Left mortar (x=0) and
+        its Right partner (x=1) differ along the periodic axis but share the same transverse position.
+
+        Requires each boundary mortar to already have `.boundary_condition` assigned. Stores on each
+        periodic mortar:
+            mort.periodic_partner_element : owner element of the partner mortar (across the domain)
+            mort.periodic_partner_face    : that element's 1-based local face id for the shared face
+        '''
+
+        # Only periodic mortars need pairing.
+        periodic = [m for m in self.boundary_mortars if m.boundary_condition.type == 'periodic']
+
+        for m in periodic:
+            # Candidate partners: periodic mortars on the boundary m names as its partner.
+            partner_name = m.boundary_condition.partner
+            candidates   = [p for p in periodic if p.boundary_condition_name == partner_name]
+            if not candidates:
+                raise ValueError(
+                    f"Periodic boundary '{m.boundary_condition_name}' names partner '{partner_name}', "
+                    f"but no periodic mortars with that name were found."
+                )
+
+            # Face centroids (mean of the mortar's endpoint node coords) in physical space.
+            m_c    = m.node_coords[:, :self.dim].mean(axis=0)                                   # (dim,)
+            cand_c = np.array([p.node_coords[:, :self.dim].mean(axis=0) for p in candidates])   # (n, dim)
+
+            # PERIODIC axis = the direction the two boundaries are separated along (largest offset).
+            # Everything else is TRANSVERSE and should match between a mortar and its partner.
+            periodic_axis = int(np.argmax(np.abs(cand_c.mean(axis=0) - m_c)))
+
+            # Closest candidate in the transverse coords only (zero out the periodic axis).
+            d = cand_c - m_c
+            d[:, periodic_axis] = 0.0
+            partner = candidates[int(np.argmin(np.linalg.norm(d, axis=1)))]
+
+            # Store the partner's OWNER element + that element's local face id, so the surface term
+            # can prolong the partner element's trace as q_plus.
+            owner = partner.connected_elements[0] or partner.connected_elements[1]
+            m.periodic_partner_element = owner
+            m.periodic_partner_face    = owner.connected_mortars.index(partner) + 1
 
     def read_mesh(self, fileName: Union[str, Path]) -> None:
         """
@@ -371,13 +417,18 @@ class Mesh:
         """
 
         # Extract the BC dictionary from the case configuration object
-        BCDict = case_cfg.boundary_conditions
+        BCDict           = case_cfg.boundary_conditions
         for mortar in self.mortars:
             if None not in mortar.connected_elements:   # Interior mortars (No BC)
                 continue
             if not mortar.boundary_condition_name in BCDict:
                 raise ValueError(f"Boundary condition: '{mortar.boundary_condition_name}' found in {case_cfg.mesh.mesh_file} but not in the control file!")
             mortar.boundary_condition = BCDict[mortar.boundary_condition_name]
+            self.boundary_mortars.append(mortar)
+
+        # Link all periodic boundary conditions. If there are none, then this function call does nothing
+        self._link_periodic_mortars()
+
 
     
     def build_delaunay_tri(self) -> None:
