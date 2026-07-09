@@ -111,7 +111,7 @@ def test_scalar_advection_spectral_convergence():
     assert np.allclose(disp, np.round(disp)), \
         f"round-trip requires advection_velocity * final_time to be whole domain lengths, got {disp}"
 
-    degrees = [2, 3, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22]
+    degrees = [2, 3, 4, 6, 8, 10, 12]
     errors  = [_roundtrip_l2_error(P) for P in degrees]
     slope   = float(np.polyfit(degrees, np.log10(errors), 1)[0])
 

@@ -5,25 +5,25 @@ import meshio
 import numpy as np
 import os
 from dingus.config import CaseCfg
+from dingus.coreNumerics import interpolation
 from dingus.mesh import mesh_class
 from pathlib import Path
-from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
 
 def _build_quad_connectivity(n_elements: int, p_plus_1: int) -> np.ndarray:
     '''
     Builds a (n_quad_cells, 4) connectivity array of global node indices.
  
     Each spectral element contributes a (P+1, P+1) grid of nodes,
-    flattened in row-major order (matching `arr.reshape(-1, dim)` on a
+    flattened in row-major order (matching 'arr.reshape(-1, dim)' on a
     (P+1, P+1, dim) array, i.e., node k <-> (i, j) = (k // P1, k % P1)).
     Within an element, that grid is decomposed into (P)x(P) bilinear quad
     cells connecting four neighboring nodes:
  
         (i,   j)  ->  (i+1, j)  ->  (i+1, j+1)  ->  (i, j+1)
  
-    Global indices are offset by `el_idx * P+1**2` so connectivity refers
+    Global indices are offset by 'el_idx * P+1**2' so connectivity refers
     correctly into the flat (N_total,) coordinate/solution arrays built by
-    `write_state_vars_to_file`, which stack elements one after another in
+    'write_state_vars_to_file', which stack elements one after another in
     element order.
  
     Inputs:
@@ -56,94 +56,83 @@ def _build_quad_connectivity(n_elements: int, p_plus_1: int) -> np.ndarray:
  
     return connectivity.astype(np.int64)
 
-def _build_structured_quad_connectivity(n_rows: int, n_cols: int) -> np.ndarray:
-    '''
-    Builds a (n_cells, 4) connectivity array for a regular (n_rows x n_cols) grid
-    of nodes flattened row-major (flat index k = row * n_cols + col), matching a
-    `np.meshgrid(..., indexing="xy").ravel()` layout.
-
-    The grid is decomposed into (n_rows-1)*(n_cols-1) bilinear quad cells, each
-    wound counter-clockwise:
-
-        (r,   c)  ->  (r,   c+1)  ->  (r+1, c+1)  ->  (r+1, c)
-
-    Inputs:
-    - n_rows : number of grid nodes in the (row / y) direction
-    - n_cols : number of grid nodes in the (column / x) direction
-
-    Outputs:
-    - connectivity : (n_cells, 4) int64 array of node indices
-    '''
-
-    r, c = np.meshgrid(np.arange(n_rows - 1), np.arange(n_cols - 1), indexing="ij")
-    r = r.ravel()
-    c = c.ravel()
-
-    n00 =  r      * n_cols +  c
-    n10 =  r      * n_cols + (c + 1)
-    n11 = (r + 1) * n_cols + (c + 1)
-    n01 = (r + 1) * n_cols +  c
-
-    return np.stack([n00, n10, n11, n01], axis=1).astype(np.int64)
-
 def _interpolate_to_uniform_grid(input_mesh: 'mesh_class.Mesh',
                                  node_values: np.ndarray,
                                  res: int) -> tuple:
     '''
-    Interpolates scattered per-node state data onto a (res x res) uniform grid
-    spanning the domain bounding box, reusing the mesh's precomputed Delaunay
-    triangulation (it is NOT rebuilt here).
+    Resamples the solution onto a finer, uniformly-spaced grid for smooth visualization by
+    evaluating each element's ACTUAL degree-P DG polynomial at uniform sub-points -- NOT by linear
+    interpolation of the scattered nodal values.
 
-    Linear interpolation is used inside the triangulation's convex hull; any grid
-    points that fall marginally outside the hull (which would otherwise be NaN)
-    are filled by nearest-neighbour lookup so the exported field is gap-free.
+    Why high-order (vs the previous LinearNDInterpolator approach): the DG solution inside an element
+    is a smooth degree-P Lagrange polynomial. Linear interpolation over a triangulation of the nodes
+    reconstructs only a faceted, C0 surface, so refining the grid just samples that same faceted
+    surface more densely and the contours never get smoother past the node density. Here we instead
+    apply the element's Lagrange interpolation matrix (from the reference quadrature nodes to a
+    uniform reference sub-grid) as a tensor product, recovering the true curved field. Now increasing
+    `res` genuinely smooths the output down to the real solution.
 
-    The de-duplicated triangulation node set already excludes the doubled element
-    -interface nodes present for LGL quadrature (see Mesh.build_delaunay_tri), so
-    the interpolated grid carries a single, well-defined value at every point.
+    Per-element subdivision (the standard high-order viz approach) is used: every element gets its own
+    (m x m) uniform sub-grid in reference space [-1,1]^2. This keeps the DG element structure and
+    faithfully shows any inter-element jumps (adjacent elements evaluate their own polynomial at the
+    shared face). Both the state values AND the physical coordinates are interpolated with the same
+    matrix, so each output point's location and value come from the same reference point (exact for
+    straight-sided elements, isoparametric for curved ones).
 
     Inputs:
-    - input_mesh  : Mesh with `delaunay_tri` / `delaunay_coords` populated
-    - node_values : (n_nodes, n_vars) values ordered like the element-stacked
-                     quadrature nodes (i.e. `all_coords` order)
-    - res         : number of uniform grid points per direction
+    - input_mesh  : constructed Mesh (provides quad_nodes, el_poly_order, and per-element geometry)
+    - node_values : (n_nodes, n_vars) values ordered like the element-stacked quadrature nodes
+                     (i.e. 'all_coords' order): element-by-element, row-major (P+1, P+1) within each.
+    - res         : approximate number of sample points per direction ACROSS THE WHOLE DOMAIN. It is
+                     split evenly among the elements (m ~ res / sqrt(n_elements) points per element per
+                     direction), and clamped to at least P+1 so we never coarsen below the solution's
+                     own node density.
 
     Outputs:
-    - grid_coords : (res*res, 2) uniform grid node coordinates
-    - grid_values : (res*res, n_vars) interpolated state values
-    - connectivity: (n_cells, 4) structured quad connectivity for the grid
+    - coords_out  : (n_elements*m*m, 2) sub-grid node coordinates
+    - values_out  : (n_elements*m*m, n_vars) high-order-interpolated state values
+    - connectivity: (n_cells, 4) per-element structured quad connectivity for the sub-grids
     '''
 
     if input_mesh.dim != 2:
         raise NotImplementedError("Uniform-grid output is only implemented for 2D meshes.")
 
-    tri = input_mesh.delaunay_tri
-    pts = input_mesh.delaunay_coords
+    dim   = input_mesh.dim
+    P1    = input_mesh.el_poly_order + 1                 # nodes per direction per element (P+1)
+    n_el  = len(input_mesh.elements)
+    nvars = node_values.shape[1]
 
-    # Align values to the (de-duplicated) triangulation node set. LGL drops the
-    # doubled interface nodes; LG uses every node as-is.
-    if input_mesh.quad_type == "LGL":
-        vals = node_values[input_mesh.delaunay_unique_idx]
-    else:
-        vals = node_values
+    # Interpret `res` as points per direction across the whole domain; split evenly among elements.
+    # Clamp to at least P1 so we never sample the polynomial more coarsely than its own nodes.
+    n_el_per_dir = max(1, int(round(np.sqrt(n_el))))
+    m            = max(P1, int(round(res / n_el_per_dir)))
 
-    # Uniform grid over the domain bounding box.
-    xmin, ymin = pts.min(axis=0)
-    xmax, ymax = pts.max(axis=0)
-    xs = np.linspace(xmin, xmax, res)
-    ys = np.linspace(ymin, ymax, res)
-    gx, gy      = np.meshgrid(xs, ys, indexing="xy")   # (res, res); row -> y, col -> x
-    grid_coords = np.column_stack([gx.ravel(), gy.ravel()])
+    # One interpolation matrix, reused for every element: reference quad nodes -> m uniform points in
+    # [-1, 1]. f_uniform = T @ f_nodes along each direction (tensor product for 2D).
+    xi_uniform = np.linspace(-1.0, 1.0, m)
+    T = interpolation.Polynomial_Interpolation_Matrix(input_mesh.quad_nodes, xi_uniform)  # (m, P1)
 
-    # Linear interpolation inside the hull; nearest-neighbour fallback for any
-    # grid points that land just outside it.
-    grid_values = LinearNDInterpolator(tri, vals)(grid_coords)
-    nan_rows    = np.isnan(grid_values).any(axis=1)
-    if nan_rows.any():
-        grid_values[nan_rows] = NearestNDInterpolator(pts, vals)(grid_coords[nan_rows])
+    coords_out = np.empty((n_el * m * m, dim),   dtype=float)
+    values_out = np.empty((n_el * m * m, nvars), dtype=float)
+    block      = P1 * P1
 
-    connectivity = _build_structured_quad_connectivity(res, res)
-    return grid_coords, grid_values, connectivity
+    for e_idx, e in enumerate(input_mesh.elements):
+        # Reshape this element's flat node data back to its (P1, P1, .) tensor layout.
+        vals = node_values[e_idx * block:(e_idx + 1) * block].reshape(P1, P1, nvars)
+        xy   = e.quad_node_coords[..., :dim]                          # (P1, P1, dim)
+
+        # Tensor-product high-order interpolation onto the (m, m) uniform reference grid.
+        vals_u = np.einsum('ai,bj,ijv->abv', T, T, vals)             # (m, m, nvars)
+        xy_u   = np.einsum('ai,bj,ijd->abd', T, T, xy)               # (m, m, dim)
+
+        sl = slice(e_idx * m * m, (e_idx + 1) * m * m)
+        values_out[sl] = vals_u.reshape(m * m, nvars)
+        coords_out[sl] = xy_u.reshape(m * m, dim)
+
+    # Per-element structured quad connectivity for the (m x m) sub-grids -- same builder as the raw
+    # node path, with m nodes per direction instead of P1.
+    connectivity = _build_quad_connectivity(n_el, m)
+    return coords_out, values_out, connectivity
 
 def _write_xmf(xmf_path: Path,
                h5_filename: str, 
@@ -155,14 +144,14 @@ def _write_xmf(xmf_path: Path,
     '''
     Writes the XMF (XDMF) sidecar file that points ParaView to the HDF5 data.
  
-    Preserves the DG element structure by using an explicit `Quadrilateral`
+    Preserves the DG element structure by using an explicit 'Quadrilateral'
     topology (one cell per (P, P) sub-quad inside each spectral element)
-    rather than a disconnected `Polyvertex` point cloud. This keeps the
+    rather than a disconnected 'Polyvertex' point cloud. This keeps the
     non-uniform LG/LGL node spacing visible and lets ParaView treat the mesh
     as a proper unstructured grid (contours, slices, streamlines, etc. all
     work correctly across element boundaries).
  
-    Connectivity is stored as its own HDF5 dataset (`/Connectivity`, shape
+    Connectivity is stored as its own HDF5 dataset ('/Connectivity', shape
     (n_quad_cells, 4)) rather than inlined as XML text, since for realistic
     node counts an inline integer list would bloat the XMF file considerably.
     '''
@@ -281,28 +270,28 @@ def _write_vtk(case_name: str,
                output_var_names: list,
                connectivity: np.ndarray) -> None:
     '''
-    Writes a native VTK unstructured-grid file (`.vtu`) via meshio.
+    Writes a native VTK unstructured-grid file ('.vtu') via meshio.
 
-    Unlike the HDF5 + XDMF path, a `.vtu` file is fully self-contained (geometry,
+    Unlike the HDF5 + XDMF path, a '.vtu' file is fully self-contained (geometry,
     connectivity, and field data in one file) and needs no companion sidecar,
-    which avoids the XDMF `filename:/dataset` path-parsing pitfalls (notably the
+    which avoids the XDMF 'filename:/dataset' path-parsing pitfalls (notably the
     Windows drive-letter colon) that make hand-written XDMF fragile in ParaView.
 
-    The DG element structure is preserved by emitting one `quad` cell per (P, P)
+    The DG element structure is preserved by emitting one 'quad' cell per (P, P)
     sub-quad inside each spectral element, using the same per-element
-    connectivity built by `_build_quad_connectivity`. Non-uniform LG/LGL node
+    connectivity built by '_build_quad_connectivity'. Non-uniform LG/LGL node
     spacing is therefore visible and ParaView treats the result as a proper
     unstructured grid.
 
-    ParaView auto-groups files sharing the `<case>_step<NNNNNN>.vtu` naming into
-    a time series, so per-step files are sufficient until a `.pvd` collection is
+    ParaView auto-groups files sharing the '<case>_step<NNNNNN>.vtu' naming into
+    a time series, so per-step files are sufficient until a '.pvd' collection is
     added alongside the solver's time loop.
 
     Inputs:
     - all_coords       : (n_nodes, dim) node coordinates (dim in {1, 2, 3})
     - all_solutions    : (n_nodes, n_vars) state-variable values, column order
-                          matching `output_var_names`
-    - output_var_names : names of the columns in `all_solutions`
+                          matching 'output_var_names'
+    - output_var_names : names of the columns in 'all_solutions'
     - connectivity     : (n_quad_cells, 4) global node indices per quad cell
     '''
 
@@ -318,7 +307,7 @@ def _write_vtk(case_name: str,
     points[:, :dim] = all_coords
 
     # One VTK "quad" cell block; connectivity already references the flat,
-    # element-stacked node ordering used to build `points`.
+    # element-stacked node ordering used to build 'points'.
     cells = [("quad", connectivity.astype(np.int64))]
 
     # Attach each state variable as node-centered point data.
@@ -390,19 +379,25 @@ def write_state_vars_to_file(input_mesh: 'mesh_class.Mesh',
         for eq_idx in range(input_config.physics.num_eq)
     ])
 
-    # Compute the state variables rather than the conservative variables (recall, the elements contain conservative variables)
-    rho         = all_sol[:, 0:1] # must use 0:1 to maintain 2D shape
-    pressure    = constRelations.compute_pressure(all_sol, input_config)
-    temperature = constRelations.compute_temperature(all_sol, input_config)
-    velocity    = all_sol[:, 1:-1] / rho
+    # Convert the stored conservative variables into the primitive state variables that get written.
+    # Scalar advection has no compressible state (its slot-0 value is the transported scalar Phi, which
+    # legitimately goes negative), so deriving density/pressure/temperature for it is both meaningless
+    # and would (correctly) trip the positivity guard in compute_pressure. Write the scalar directly.
+    if input_config.physics.model == "scalar_advection":
+        state_vars = all_sol                          # (num_nodes, 1), matches var_names = ["Phi"]
+    else:
+        rho         = all_sol[:, 0:1] # must use 0:1 to maintain 2D shape
+        pressure    = constRelations.compute_pressure   (all_sol, input_config)
+        temperature = constRelations.compute_temperature(all_sol, input_config)
+        velocity    = all_sol[:, 1:-1] / rho
 
-    # Combine state variables into a single output array
-    state_vars = np.hstack([
-        rho                       ,   # density 
-        velocity                  ,   # velocity components
-        pressure   [:, np.newaxis],   # pressure (must use np.newaxis to create 2D shape)
-        temperature[:, np.newaxis]    # temperature (must use np.newaxis to create 2D shape)
-    ])
+        # Combine state variables into a single output array
+        state_vars = np.hstack([
+            rho                       ,   # density
+            velocity                  ,   # velocity components
+            pressure   [:, np.newaxis],   # pressure (must use np.newaxis to create 2D shape)
+            temperature[:, np.newaxis]    # temperature (must use np.newaxis to create 2D shape)
+        ])
 
     # Build per-element Quadrilateral connectivity (preserves DG element
     # structure and non-uniform quadrature node spacing in ParaView).
@@ -427,23 +422,23 @@ def write_state_vars_to_file(input_mesh: 'mesh_class.Mesh',
 
 def write_pvd_collection(case_name: str, records: list, output_root: Path) -> None:
     '''
-    Writes a ParaView `.pvd` collection file that maps each per-step `.vtu` to its true
+    Writes a ParaView '.pvd' collection file that maps each per-step '.vtu' to its true
     SIMULATION TIME. This lets ParaView show real times (0.0, 0.02, ...) on the timeline while
-    the `.vtu` files keep clean, sortable `_step<NNNNNN>` names (decimal times in filenames break
+    the '.vtu' files keep clean, sortable '_step<NNNNNN>' names (decimal times in filenames break
     ParaView's automatic time-series parsing, so the time lives in the collection instead).
 
-    Open the resulting `<case_name>.pvd` in ParaView instead of the folder; it also fixes the
-    ordering of interval-based output and ignores stale `.vtu` files from previous runs (only the
+    Open the resulting '<case_name>.pvd' in ParaView instead of the folder; it also fixes the
+    ordering of interval-based output and ignores stale '.vtu' files from previous runs (only the
     files listed here are loaded).
 
     Inputs:
-    - case_name   : the case name (matches the `<case_name>_step<NNNNNN>.vtu` file prefix).
+    - case_name   : the case name (matches the '<case_name>_step<NNNNNN>.vtu' file prefix).
     - records     : list of (time, step) tuples for every frame written so far.
-    - output_root : directory containing the `vtk/` folder; the `.pvd` is written here, and the
-                    `file="..."` paths inside it are relative to this location.
+    - output_root : directory containing the 'vtk/' folder; the '.pvd' is written here, and the
+                    'file="..."' paths inside it are relative to this location.
 
     Outputs:
-    - None (writes `<output_root>/<case_name>.pvd`).
+    - None (writes '<output_root>/<case_name>.pvd').
     '''
 
     lines = ['<?xml version="1.0"?>',

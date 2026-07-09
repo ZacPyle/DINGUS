@@ -1,6 +1,7 @@
 # src/dingus/physics/fluxes.py
 
 from dingus.config import CaseCfg
+from dingus.physics.constitutiveRelations import compute_pressure
 import numpy as np
 
 """
@@ -35,6 +36,21 @@ In summary: the flux computations depend on:
     - The problem's dimensionality (1D, 2D, 3D) 
 """
 
+def _max_wave_speed_one_face_side(sol: np.ndarray, normal: np.ndarray, case_cfg: CaseCfg):
+    # Extract components from solution vector
+    rho      = sol[..., 0]
+    momentum = sol[..., 1:-1]
+    pressure = compute_pressure(sol, case_cfg)
+
+    # Compute the speed of sound
+    c = np.sqrt(case_cfg.physics.gamma * pressure / rho)
+
+    # Project the velocity onto face-normal vector
+    vel_mag_n = np.sum(momentum * normal, axis = -1) / rho  # u \cdot n / rho
+
+    # compute maximum wavespeed
+    return np.abs(vel_mag_n) + c
+
 def max_wave_speed(sol: np.ndarray, case_cfg: CaseCfg) -> float:
     '''
     Global maximum signal (wave) speed in the field, used to size the explicit time step via
@@ -53,9 +69,17 @@ def max_wave_speed(sol: np.ndarray, case_cfg: CaseCfg) -> float:
             return float(np.linalg.norm(case_cfg.physics.advection_velocity))
 
         case 'euler':
-            raise NotImplementedError(
-                f"max_wave_speed() not yet implemented for physics model '{case_cfg.physics.model}'."
-            )
+            # Extract density and momentum from solution vector
+            rho      = sol[...,0]
+            momentum = sol[...,1:-1]
+
+            # Compute the speed of sound and velocity magnitude
+            pressure = compute_pressure(sol, case_cfg)
+            c        = np.sqrt(case_cfg.physics.gamma * pressure / rho)
+            vel_mag  = np.linalg.norm(momentum, axis=-1) / rho
+
+            # Compute the max wave speed (velocity_mag + speed of sound)
+            return float(np.max(vel_mag + c))
         
         case 'navier-stokes':
             raise NotImplementedError(
@@ -88,9 +112,11 @@ def _max_abs_face_speed(q_minus : np.ndarray,
             return np.abs(a_n)[:, None]                   # (M, 1)
 
         case 'euler':
-            raise NotImplementedError(
-                f"_max_abs_face_speed() not yet implemented for '{case_cfg.physics.model}'."
-            )
+            # compute the maximum wavespeed between the two faces using the interior (minus) and exterior (plus) states
+            lam = np.maximum(_max_wave_speed_one_face_side(q_minus, normal, case_cfg),
+                             _max_wave_speed_one_face_side(q_plus , normal, case_cfg))
+            
+            return lam[:, None]
         
         case 'navier-stokes':
             raise NotImplementedError(
@@ -135,25 +161,88 @@ def _roe_dissipation(q_minus : np.ndarray,
 
         case _:
             raise ValueError(f"Unknown physics model: '{case_cfg.physics.model}'.")
+        
+def _compute_scalar_flux(sol : np.ndarray, case_cfg : CaseCfg) -> np.ndarray:
+    '''
+    Callable function to compute the flux in a scalar advection equation: 
+
+        q_t + div(F_vec)  = 0    where F_vec = a * q, and a is the advection velocity vector. Thus:
+        q_t + a . grad(q) = 0     <=>     q_t + sum_d (a_d q)_{x_d} = 0
+
+    Inputs:
+    - sol      : (..., num_eq) array of conserved variables. The leading axes are arbitrary
+                 (e.g. (P+1, P+1) for a full 2D element, or (P+1,) for a single face line), so
+                 this works for both volume and face evaluations in any dimensionality.
+    - case_cfg : validated case configuration (selects the physics model + parameters).
+
+    Outputs:
+    - flux : (..., num_eq, ndim) physical flux; flux[..., d] is the F_d component.
+    '''
+
+    # Extract the advection velocity vector from the configuration
+    a = case_cfg.physics.advection_velocity       # (ndim,)
+
+    # F_d = a_d * u for every direction d, in one broadcast:
+    #   sol[..., None] : (..., num_eq, 1)   (add a trailing dimension axis)
+    #   a              : (ndim,)            (broadcasts along that new last axis)
+    #   product        : (..., num_eq, ndim)
+    flux = sol[..., None] * a
+    return flux
+
+def _compute_euler_flux(sol : np.ndarray, case_cfg : CaseCfg) -> np.ndarray:
+    '''
+    Callable function to compute the euler (inviscid) fluxes: 
+
+        q_t + div(F_vec) = 0,    
+        
+    where F_vec = (F_1, ..., F_ndim), where F_d is the physical inviscid flux in direction d.
+    E.g. F_1 = [rho u, rho u u + p, rho u v, rho u w, (E+p) u]^T in 3D
+
+    Inputs:
+    - sol      : (..., num_eq) array of conserved variables. The leading axes are arbitrary
+                 (e.g. (P+1, P+1) for a full 2D element, or (P+1,) for a single face line), so
+                 this works for both volume and face evaluations in any dimensionality.
+    - case_cfg : validated case configuration (selects the physics model + parameters).
+
+    Outputs:
+    - flux : (..., num_eq, ndim) physical flux; flux[..., d] is the F_d component.
+    '''
+
+    # Extract rho, momentum, and energy components from the input solution
+    rho      = sol[..., 0   ]      # shape (...,     )  density
+    momentum = sol[..., 1:-1]      # shape (..., ndim)  momentum components
+    rhoE     = sol[...,   -1]      # shape (...,     )  energy density
+
+    # Compute the pressure for use in energy flux computation
+    pressure = compute_pressure(sol, case_cfg)
+
+    # extract the velocity vector from the momentum vector
+    velocity = momentum / rho[..., None]  # remember to add dummy axis to rho
+
+    # Create the flux components: rho*u_i,  rho*u_i_u_j + \delta_ij * p,  u_i(rhoE + p)
+    mass_flux     = momentum[..., None, :]                                     # shape (..., 1 (single equation), ndim (Flux is a vector!))
+    momentum_flux = np.einsum('...i,...j->...ij', momentum, velocity) \
+                    + pressure[..., None, None] * np.eye(momentum.shape[-1])   # shape (..., ndim               , ndim (Flux is a vector!))
+    energy_flux   = ((rhoE + pressure)[...,None] * velocity)[..., None, :]     # shape (..., 1 (single equation), ndim (Flux is a vector!))
+
+    # Combine mass, momentum, and energy flux into a single flux vector
+    flux = np.concatenate([mass_flux, momentum_flux, energy_flux], axis=-2)     # shape (..., numEq              , ndim (Flux is a vector!))
+    
+    return flux
 
 def compute_volume_flux(sol : np.ndarray, case_cfg : CaseCfg) -> np.ndarray:
     '''
     Compute the physical (volume) flux F_vec of the governing equations at every quadrature node.
     The result carries one flux component per spatial dimension in the LAST axis: 
-        `flux[..., d]` is the flux in physical direction d (d = 0->x, 1->y, 2->z).
+        'flux[..., d]' is the flux in physical direction d (d = 0->x, 1->y, 2->z).
 
-    scalar_advection flux:
-        q_t + div(F_vec)  = 0    where F_vec = a * q, and a is the advection velocity vector. Thus:
-        q_t + a . grad(q) = 0     <=>     q_t + sum_d (a_d q)_{x_d} = 0
+    This function is a wrapper that calls internal helper functions to compute the following fluxes:
+    - scalar advection flux
+    - Euler flux
+    - Navier-Stokes flux
 
-    euler flux:
-        q_t + div(F_vec) = 0,    where F_vec = (F_1, ..., F_ndim), where F_d is the physical 
-        inviscid flux in direction d. E.g. F_1 = [rho u, rho u u + p, rho u v, rho u w, (E+p) u]^T in 3D
-
-    navier-stokes flux:
-        q_t + div(F_vec) = 0,    where F_vec = (F_1, ..., F_ndim), where F_d is the physical 
-        inviscid AND viscous flux in direction d. E.g. F_1 = [rho u, rho u u + p - tau_xx, rho u v - tau_xy, 
-        rho u w - tau_xz, (E+p) u - u tau_xx - v tau_xy - w tau_xz - k T_x]^T in 3D
+    Note that the Navier-Stokes flux calls the Euler flux function to compute the inviscid flux 
+    component of the Navier-Stokes fluxes.
 
     Inputs:
     - sol      : (..., num_eq) array of conserved variables. The leading axes are arbitrary
@@ -168,20 +257,11 @@ def compute_volume_flux(sol : np.ndarray, case_cfg : CaseCfg) -> np.ndarray:
     # First, determine the physics model specified in the input configuration.
     match case_cfg.physics.model:
         case 'scalar_advection':
-            # Extract the advection velocity vector from the configuration
-            a = case_cfg.physics.advection_velocity       # (ndim,)
-
-            # F_d = a_d * u for every direction d, in one broadcast:
-            #   sol[..., None] : (..., num_eq, 1)   (add a trailing dimension axis)
-            #   a              : (ndim,)            (broadcasts along that new last axis)
-            #   product        : (..., num_eq, ndim)
-            flux = sol[..., None] * a
-            return flux
+            return _compute_scalar_flux(sol, case_cfg)
             
         case 'euler':
-            raise NotImplementedError("Euler volume flux computation not yet implemented!")
-            # TODO: Implement physical euler fluxes in each spatial direction
-        
+            return _compute_euler_flux(sol, case_cfg)
+            
         case 'navier-stokes':
             raise NotImplementedError("Navier-Stokes volume flux computation not yet implemented!")
             # TODO: Implement physical Navier-Stokes fluxes in each spatial direction. Do I need to separate

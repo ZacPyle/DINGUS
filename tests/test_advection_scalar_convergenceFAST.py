@@ -1,15 +1,17 @@
 # tests/test_advection_scalar_convergence.py
-#
-# Accuracy test driven by the tests/test_case_advection_scalar/ case directory. It loads that
-# case's control.yaml, mesh, and initial_condition.py, and sweeps ONLY the polynomial degree.
-#
-# Physics of the check: for a PERIODIC domain with advection_velocity * final_time equal to a
-# whole number of domain lengths, the exact solution at final_time equals the initial condition.
-# The L2 error between the final and initial fields is therefore a pure accuracy measure, and for
-# a high-order DG method on a smooth field it must fall SPECTRALLY (exponentially) with poly_deg.
-#
-# Produces a table in the terminal (use `pytest -s`) and a semilog convergence plot in
-# tests/test_case_advection_scalar/outputs/figures/.
+'''
+Accuracy test driven by the tests/test_case_advection_scalar/ case directory. It loads that
+case's control.yaml, mesh, and initial_condition.py, and sweeps ONLY the polynomial degree.
+
+Physics of the check: for a PERIODIC domain with advection_velocity * final_time equal to a
+whole number of domain lengths, the exact solution at final_time equals the initial condition.
+The L2 error between the final and initial fields is therefore a pure accuracy measure, and for
+a high-order DG method on a smooth field it must fall SPECTRALLY (exponentially) with poly_deg.
+
+Produces a table in the terminal (use `pytest -s`) and a semilog convergence plot in
+tests/test_case_advection_scalar/outputs/figures/.
+'''
+
 import numpy as np
 import pytest
 from pathlib import Path

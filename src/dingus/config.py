@@ -134,7 +134,7 @@ class TimeIntegratorCfg(BaseModel):
         # Errors ---------------------------------------------
 
         # Warnings ---------------------------------------------
-        if self.start_time not in self.model_fields_set:
+        if 'start_time' not in self.model_fields_set:
             warnings.warn("No start_time was set in the control file, defaulting to start_time = 0.0")
 
         return self
