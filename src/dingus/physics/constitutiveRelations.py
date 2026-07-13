@@ -62,3 +62,21 @@ def compute_temperature(input_sol: np.ndarray, case_cfg: CaseCfg) -> np.ndarray:
     temperature = gammaM2 * pressure / input_sol[...,0]
 
     return temperature
+
+def compute_viscosity(input_sol: np.ndarray, case_cfg: CaseCfg) -> np.ndarray:
+    '''
+    Dimensionless dynamic viscosity mu* = mu / mu_ref, shape = sol.shape[:-1] (one per node).
+
+    Constant model (mu* = 1) for now -- it isolates the discretization from the viscosity model
+    during verification (MMS / Taylor-Green). Sutherland is a drop-in replacement later:
+
+        T  = compute_temperature(sol, case_cfg)            # T* = T / T_inf
+        S  = 110.4 / T_ref                                 # needs a reference T_ref (dimensional)
+        mu = T**1.5 * (1.0 + S) / (T + S)                  # nondimensional Sutherland's law
+
+    Kept as its own function so that swap is a one-line change (see the viscosity_model config
+    toggle planned on the roadmap).
+    '''
+
+    rho = input_sol[..., 0]
+    return np.ones_like(rho)

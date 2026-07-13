@@ -235,8 +235,8 @@ class IOCfg(BaseModel):
         if 'output_format' not in self.model_fields_set:
             warnings.warn("No output data format specified, defaulting to 'vtk'.")
 
-        if 'plot_uniform_grid' not in self.model_fields_set:
-            warnings.warn("No preference specified to uniform vs quadrature grid in data output. Defaulting to quadrature grid.")
+        #if 'plot_uniform_grid' not in self.model_fields_set:
+        #    warnings.warn("No preference specified to uniform vs quadrature grid in data output. Defaulting to quadrature grid.")
 
         if self.plot_uniform_grid == True and 'uniform_grid_res' not in self.model_fields_set:
             warnings.warn("No uniform grid resolution is specified for data output. Defaulting to 100 nodes in each dimension.")
