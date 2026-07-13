@@ -53,6 +53,10 @@ _FACE_2D = {
     4: {'axis': 0, 'side': 'min', 'free': 'j'}   # left
 }
 
+#######################################################################################
+##### HELPER FUNCTIONS ################################################################
+#######################################################################################
+
 def _prolong_to_face_2d(sol: np.ndarray, face_id: int, I_min: np.ndarray, I_max: np.ndarray) -> np.ndarray:
     '''
     Interpolate a (P+1, P+1, num_eq) solution to one face -> (P+1, num_eq) trace along the free axis.
@@ -117,6 +121,25 @@ def _lift_face_to_volume_2d(corr: np.ndarray, face_id: int,
         return np.einsum('ie,j->ije', corr, basis)            # (P+1, P+1, num_eq)
     else:                          # xi face: corr indexed by j (free), basis spreads over i (normal)
         return np.einsum('je,i->ije', corr, basis)
+    
+def _lift_grad_face_to_volume_2d(corr   : np.ndarray, 
+                                 face_id: int,
+                                 I_min  : np.ndarray, 
+                                 I_max  : np.ndarray, 
+                                 w      : np.ndarray) -> np.ndarray:
+    '''
+    Lift a face correction (P+1, num_eq, ndim) back into a (P+1, P+1, num_eq, ndim) volume array.
+    Identical to _lift_face_to_volume_2d, but the correction carries the extra trailing 
+    spatial-direction (ndim) axis, so the einsum gains a 'd' index.
+    '''
+    facedata = _FACE_2D[face_id]
+    Irow     = (I_min if facedata['side'] == 'min' else I_max)[0]     # (P+1,) = L_k(-1) or L_k(+1)
+    basis    = Irow / w                                               # (P+1,) boundary basis / weight
+
+    if facedata['axis'] == 1:      # eta face: corr indexed by i (free), basis spreads over j (normal)
+        return np.einsum('ied,j->ijed', corr, basis)         # (P+1, P+1, num_eq, ndim)
+    else:                          # xi face: corr indexed by j (free), basis spreads over i (normal)
+        return np.einsum('jed,i->ijed', corr, basis)
 
 def _compute_divergence_1d(mesh : mesh_class.Mesh, case_cfg : CaseCfg) -> None:
     """
@@ -179,7 +202,6 @@ def _compute_divergence_2d(mesh : mesh_class.Mesh, case_cfg : CaseCfg) -> None:
         # Combine the derivatives to form the divergence term. This will be saved as the residual
         # in the element object, then overwritten later after the surface coupling term is added.
         e.residual = dF_tilde_dxi + dG_tilde_deta  # shape (P+1, P+1, num_eq)
-
     return
 
 def _compute_divergence_3d(mesh : mesh_class.Mesh, case_cfg : CaseCfg) -> None:
@@ -216,32 +238,7 @@ def _compute_divergence_3d(mesh : mesh_class.Mesh, case_cfg : CaseCfg) -> None:
         # Combine the derivatives to form the divergence term. This will be saved as the residual
         # in the element object, then overwritten later after the surface coupling term is added.
         e.residual = dF_tilde_dxi + dG_tilde_deta + dH_tilde_dzeta # shape (P+1, P+1, P+1, num_eq)
-
     return
-
-def _compute_divergence(mesh : mesh_class.Mesh, case_cfg : CaseCfg) -> None:
-    """
-    Dimension-dispatch wrapper. Writes `e.residual` (shape (P+1,)*dim + (num_eq,)) for every
-    element in `mesh`.
-    Note: This function computes the divergence of the contravariant VOLUME fluxes ONLY. The
-    surface coupling terms are used to update e.residual after this function is called.
-
-    Inputs:
-    - mesh : constructed Mesh (elements, metrics, deriv_mat, face_interp_min/max all populated).
-    - case_cfg  : validated case configuration.
-    """
-
-    # Create a dispatch dictionary to call appropriate divergence function based on dimensionality.
-    DIVERGENCE_DISPATCH = {
-        1: _compute_divergence_1d,
-        2: _compute_divergence_2d,
-        3: _compute_divergence_3d,
-    }
-
-    # Call the appropriate divergence function based on the mesh dimensionality
-    if mesh.dim not in DIVERGENCE_DISPATCH:
-        raise NotImplementedError(f"Divergence not implemented for dimensionality: {mesh.dim}")
-    DIVERGENCE_DISPATCH[mesh.dim](mesh, case_cfg)
 
 def _compute_surface_1d(mesh, case_cfg: CaseCfg, t: float = 0.0) -> None:
     raise NotImplementedError(f"Boundary flux computations are not implemented in 1D yet!")
@@ -305,6 +302,175 @@ def _compute_surface_3d(mesh, case_cfg: CaseCfg, t: float = 0.0) -> None:
     raise NotImplementedError(f"Boundary flux computations are not implemented in 3D yet!")
     return
 
+def _compute_gradient_volume_1d(mesh, case_cfg: CaseCfg) -> None:
+    raise NotImplementedError("Gradient (BR1) volume term is not implemented in 1D yet!")
+
+def _compute_gradient_volume_2d(mesh, case_cfg: CaseCfg) -> None:
+    '''
+    VOLUME term of g = grad(q): the strong-form contravariant gradient of the solution.
+    Writes J*g (un-scaled) into e.grad_q; the surface term adds to it and the final 1/J scaling
+    happens in the wrapper. Mirrors _compute_divergence_2d, but with q as the pseudo-flux and an
+    extra trailing ndim axis on the output.
+    '''
+    D = mesh.deriv_mat  # (P+1, P+1)
+
+    for e in mesh.elements:
+        q   = e.solution                       # (P+1, P+1, num_eq)
+        J   = e.jacobian_det                   # (P+1, P+1)
+        Ja1 = J[..., None] * e.contravar_xi    # (P+1, P+1, 2)   (J a^1)
+        Ja2 = J[..., None] * e.contravar_eta   # (P+1, P+1, 2)   (J a^2)
+
+        # Pseudo-fluxes: q_e * (J a^i)_d  ->  (P+1, P+1, num_eq, ndim)
+        Phi_xi  = np.einsum('ije,ijd->ijed', q, Ja1)
+        Phi_eta = np.einsum('ije,ijd->ijed', q, Ja2)
+
+        # Collocation derivatives along each reference direction (D contracts the free axis)
+        dPhi_xi_dxi  = np.einsum('il,ljed->ijed', D, Phi_xi)
+        dPhi_eta_deta = np.einsum('jl,iled->ijed', D, Phi_eta)
+
+        # J * grad(q), before the surface correction and the 1/J scaling
+        e.grad_q = dPhi_xi_dxi + dPhi_eta_deta   # (P+1, P+1, num_eq, ndim)
+
+def _compute_gradient_volume_3d(mesh, case_cfg: CaseCfg) -> None:
+    raise NotImplementedError("Gradient (BR1) volume term is not implemented in 3D yet!")
+
+def _compute_gradient_surface_1d(mesh, case_cfg: CaseCfg, t: float = 0.0) -> None:
+    raise NotImplementedError("Gradient (BR1) surface term is not implemented in 1D yet!")
+
+def _compute_gradient_surface_2d(mesh, case_cfg: CaseCfg, t: float = 0.0) -> None:
+    '''
+    SURFACE term of g = grad(q): replace the interior boundary trace with the CENTRAL numerical
+    trace q* = 1/2 (q- + q+) and lift (q* - q-) * (metric normal) into e.grad_q. This is
+    _compute_surface_2d with the numerical-flux jump (f* - f_int) swapped for the central-trace
+    jump (q* - q-), no Riemann solver, and a per-direction (ndim) correction.
+    '''
+    I_min, I_max, w = mesh.face_interp_min, mesh.face_interp_max, mesh.quad_weights
+
+    for e in mesh.elements:
+        for face_idx0, mort in enumerate(e.connected_mortars):
+            face_id = face_idx0 + 1
+
+            # Interior trace of THIS element at the face
+            q_minus = _prolong_to_face_2d(e.solution, face_id, I_min, I_max)   # (P+1, num_eq)
+
+            # Outward normal for THIS element (stored normal is outward-from-owner)
+            left, right = mort.connected_elements
+            owner  = left if left is not None else right
+            normal = mort.normal_vector if (e is owner) else -mort.normal_vector   # (P+1, 2)
+
+            # Exterior trace q_plus -- IDENTICAL selection logic to _compute_surface_2d
+            if None in mort.connected_elements:
+                if mort.boundary_condition.type == 'periodic':
+                    q_plus = _prolong_to_face_2d(mort.periodic_partner_element.solution,
+                                                 mort.periodic_partner_face, I_min, I_max)
+                else:
+                    # BR1 boundary trace: use the BC ghost state. (Wall gradient BCs are Phase 3;
+                    # for the periodic vortex verification mesh this branch is never hit.)
+                    q_plus = exterior_state(mort, q_minus, case_cfg, t)
+            else:
+                neighbor    = right if (e is left) else left
+                nbr_face_id = neighbor.connected_mortars.index(mort) + 1
+                q_plus      = _prolong_to_face_2d(neighbor.solution, nbr_face_id, I_min, I_max)
+
+            # Central numerical trace and its jump from the interior value
+            q_star = 0.5 * (q_minus + q_plus)             # (P+1, num_eq)
+            dq     = q_star - q_minus                     # = 1/2 (q_plus - q_minus)
+
+            # Metric normal at the face: S * n = |J a^i| * (unit normal) = the (J a^i) vector.
+            Ja  = e.jacobian_det[..., None] * (e.contravar_xi if _FACE_2D[face_id]['axis'] == 0
+                                               else e.contravar_eta)                              # (P+1,P+1,2)
+            S   = np.linalg.norm(_prolong_metric_to_face_2d(Ja, face_id, I_min, I_max), axis=-1)  # (P+1,)
+            metric_normal = S[:, None] * normal            # (P+1, 2)  = (J a^i) at the face
+
+            # Per-direction correction: (q* - q-)_e * (metric normal)_d  ->  (P+1, num_eq, ndim)
+            corr = dq[..., None] * metric_normal[:, None, :]
+
+            # Lift into the volume (strong form: ADD), same boundary basis / weight as the residual
+            e.grad_q += _lift_grad_face_to_volume_2d(corr, face_id, I_min, I_max, w)
+
+def _compute_gradient_surface_3d(mesh, case_cfg: CaseCfg, t: float = 0.0) -> None:
+    raise NotImplementedError("Gradient (BR1) surface term is not implemented in 3D yet!")
+
+#######################################################################################
+##### PRIMARY FUNCTIONS ###############################################################
+#######################################################################################
+
+def _compute_gradient_volume(mesh, case_cfg: CaseCfg) -> None:
+    """
+    Dimension-dispatch wrapper for the BR1 gradient VOLUME term. Writes J * grad(q) into e.grad_q
+    for every element (the surface correction and 1/J scaling are applied afterward by
+    compute_gradient). Mirrors _compute_divergence.
+    """
+
+    # Create a dispatch dictionary to call the appropriate gradient-volume function by dimensionality.
+    GRADIENT_VOLUME_DISPATCH = {
+        1: _compute_gradient_volume_1d,
+        2: _compute_gradient_volume_2d,
+        3: _compute_gradient_volume_3d,
+    }
+
+    # Call the appropriate gradient-volume function based on the mesh dimensionality
+    if mesh.dim not in GRADIENT_VOLUME_DISPATCH:
+        raise NotImplementedError(f"Gradient volume term not implemented for dimensionality: {mesh.dim}")
+    GRADIENT_VOLUME_DISPATCH[mesh.dim](mesh, case_cfg)
+
+def _compute_gradient_surface(mesh, case_cfg: CaseCfg, t: float = 0.0) -> None:
+    """
+    Dimension-dispatch wrapper for the BR1 gradient SURFACE term. Adds the central-trace interface
+    correction to e.grad_q for every element. Mirrors _compute_surface.
+    """
+
+    # Create a dispatch dictionary to call the appropriate gradient-surface function by dimensionality.
+    GRADIENT_SURFACE_DISPATCH = {
+        1: _compute_gradient_surface_1d,
+        2: _compute_gradient_surface_2d,
+        3: _compute_gradient_surface_3d,
+    }
+
+    # Call the appropriate gradient-surface function based on the mesh dimensionality
+    if mesh.dim not in GRADIENT_SURFACE_DISPATCH:
+        raise NotImplementedError(f"Gradient surface term not implemented for dimensionality: {mesh.dim}")
+    GRADIENT_SURFACE_DISPATCH[mesh.dim](mesh, case_cfg, t)
+
+def compute_gradient(mesh, case_cfg: CaseCfg, t: float = 0.0) -> None:
+    '''
+    BR1 gradient wrapper. Writes the physical gradient g = grad(q) into e.grad_q for every element,
+    shape (P+1, P+1, num_eq, ndim). Structure mirrors compute_residual:
+        1. volume term  -> e.grad_q = J * (contravariant gradient of q)
+        2. surface term -> add the central-trace interface correction
+        3. scale by 1/J -> e.grad_q = grad(q)
+    Both terms are dimension-dispatched like the residual.
+    '''
+    _compute_gradient_volume (mesh, case_cfg   )
+    _compute_gradient_surface(mesh, case_cfg, t)
+    for e in mesh.elements:
+        e.grad_q *= e.jacobian_det_inv[..., None, None]   # two extra axes: num_eq and ndim
+
+
+def _compute_divergence(mesh : mesh_class.Mesh, case_cfg : CaseCfg) -> None:
+    """
+    Dimension-dispatch wrapper. Writes `e.residual` (shape (P+1,)*dim + (num_eq,)) for every
+    element in `mesh`.
+    Note: This function computes the divergence of the contravariant VOLUME fluxes ONLY. The
+    surface coupling terms are used to update e.residual after this function is called.
+
+    Inputs:
+    - mesh : constructed Mesh (elements, metrics, deriv_mat, face_interp_min/max all populated).
+    - case_cfg  : validated case configuration.
+    """
+
+    # Create a dispatch dictionary to call appropriate divergence function based on dimensionality.
+    DIVERGENCE_DISPATCH = {
+        1: _compute_divergence_1d,
+        2: _compute_divergence_2d,
+        3: _compute_divergence_3d,
+    }
+
+    # Call the appropriate divergence function based on the mesh dimensionality
+    if mesh.dim not in DIVERGENCE_DISPATCH:
+        raise NotImplementedError(f"Divergence not implemented for dimensionality: {mesh.dim}")
+    DIVERGENCE_DISPATCH[mesh.dim](mesh, case_cfg)
+
 def _compute_surface(mesh, case_cfg: CaseCfg, t: float = 0.0) -> None:
     """
     Dimension-dispatch wrapper. Corrects `e.residual` with the surface terms for every
@@ -326,7 +492,6 @@ def _compute_surface(mesh, case_cfg: CaseCfg, t: float = 0.0) -> None:
     if mesh.dim not in SURFACE_DISPATCH:
         raise NotImplementedError(f"Surface correction not implemented for dimensionality: {mesh.dim}")
     SURFACE_DISPATCH[mesh.dim](mesh, case_cfg, t)
-
 
 def compute_residual(mesh : mesh_class.Mesh, case_cfg : CaseCfg, t : float=0.0) -> None:
     """

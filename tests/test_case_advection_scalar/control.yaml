@@ -9,6 +9,7 @@ physics:
   #Pr       : 0.71                # Prandtl number (if applicable)
   #mach_ref : 1.0                 # Reference Mach number (if applicable)
   advection_velocity: [1.0, 1.0] # Advection velocity vector for scalar_advection models.
+  riemann_solver : "LLF"              # Riemann solver used to compute element boundary fluxes
 
 # Specify the mesh-specific parameters.
 mesh:

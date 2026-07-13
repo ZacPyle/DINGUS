@@ -70,5 +70,7 @@ class SpectralElement:
         self.normal_zeta       = np.array([])
         
         # Solution data
-        self.solution = np.array([])
+        self.grad_q   = np.array([])
         self.residual = np.array([])
+        self.solution = np.array([])
+        
