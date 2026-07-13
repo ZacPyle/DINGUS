@@ -36,6 +36,32 @@ In summary: the flux computations depend on:
     - The problem's dimensionality (1D, 2D, 3D) 
 """
 
+# ---------------------------------------------------------------------------------------------
+# Entropy fix
+# ---------------------------------------------------------------------------------------------
+# Entropy-fix strength: the acoustic eigenvalues |u.n +/- c| are floored below
+# eps * (|u.n| + c) to keep the Roe dissipation from vanishing at sonic points
+# (which would otherwise admit entropy-violating expansion shocks). eps ~ 0.1 is standard.
+_ROE_ENTROPY_FIX_EPS = 0.1
+
+def _harten_entropy_fix(lam: np.ndarray, delta: np.ndarray) -> np.ndarray:
+    '''
+    Harten's smooth entropy fix for |lambda|. Where |lambda| >= delta it returns |lambda|
+    unchanged; where |lambda| < delta it replaces the kink at zero with the parabola
+    (lambda^2 + delta^2) / (2 delta), so the dissipation stays bounded away from zero through
+    a sonic point. 'lam' and 'delta' are (M,) arrays; 'delta > 0'.
+
+    For reference, see:
+        Harten, A. (1983), "High Resolution Schemes for Hyperbolic Conservation Laws," 
+            Journal of Computational Physics, 49(3), 357–393. 
+
+        Toro, E. F. (2009), Riemann Solvers and Numerical Methods for Fluid Dynamics, 
+            3rd ed., Springer
+    '''
+    abs_lam = np.abs(lam)
+    return np.where(abs_lam >= delta, abs_lam, 0.5 * (lam**2 + delta**2) / delta)
+
+
 def _max_wave_speed_one_face_side(sol: np.ndarray, normal: np.ndarray, case_cfg: CaseCfg):
     # Extract components from solution vector
     rho      = sol[..., 0]
@@ -126,6 +152,92 @@ def _max_abs_face_speed(q_minus : np.ndarray,
         case _:
             raise ValueError(f"Unknown physics model: '{case_cfg.physics.model}'.")
         
+def _roe_dissipation_euler(q_minus : np.ndarray,
+                           q_plus  : np.ndarray,
+                           normal  : np.ndarray,
+                           case_cfg: CaseCfg) -> np.ndarray:
+    '''
+    Roe matrix dissipation |A_Roe| . (q_plus - q_minus) for the compressible Euler equations,
+    written dimension-agnostically (works for ndim = 1, 2, 3). The jump across the face is
+    decomposed into the three Euler wave families sharing the Roe-averaged state:
+
+        - acoustic waves    : eigenvalue u_n -/+ c   (genuinely nonlinear; entropy-fixed)
+        - entropy/contact   : eigenvalue u_n         (linearly degenerate)
+        - shear wave(s)     : eigenvalue u_n         (tangential velocity jump)
+
+    and each wave is dissipated by its own |eigenvalue|. See Toro, 'Riemann Solvers and 
+    Numerical Methods for Fluid Dynamics', Ch. 11 and Roe (1981).
+
+    Inputs mirror _roe_dissipation; returns (M, num_eq) = |A_Roe| . (q_plus - q_minus), which
+    the numerical flux uses as   F* = central - 0.5 * D.
+    '''
+
+    gamma = case_cfg.physics.gamma
+
+    # Extract left (interior) state, constructing primitive variables from conserved variables
+    rho_L = q_minus[..., 0   ]
+    vel_L = q_minus[..., 1:-1] / rho_L[..., None]
+    p_L   = compute_pressure(q_minus, case_cfg)
+    H_L   = (q_minus[..., -1] + p_L) / rho_L          # total enthalpy: h = e + p/rho = (rhoE + p) / rho
+
+    # Extract right (exterior) state, constructing primitive variables from conserved variables
+    rho_R = q_plus[..., 0   ]
+    vel_R = q_plus[..., 1:-1] / rho_R[..., None]
+    p_R   = compute_pressure(q_plus, case_cfg)
+    H_R   = (q_plus[..., -1] + p_R) / rho_R          # total enthalpy: h = e + p/rho = (rhoE + p) / rho
+
+    # Compute the rho average weights
+    sq_L   = np.sqrt(rho_L)
+    sq_R   = np.sqrt(rho_R)
+    inv_sq = 1.0 / (sq_L + sq_R)
+
+    # Compute the rho averages
+    rho = sq_L * sq_R                           # Roe-averaged density
+    vel = (sq_L[..., None] * vel_L + sq_R[..., None] * vel_R) * inv_sq[..., None]
+    H   = (sq_L            * H_L   + sq_R            * H_R  ) * inv_sq
+    un = np.sum(vel * normal, axis=-1)          # Roe-averaged normal velocity
+    q2 = np.sum(vel * vel, axis=-1)
+    c  = np.sqrt((gamma-1.0) * (H - 0.5 * q2))  # Roe-averaged sound speed (M,)
+
+    # Compute the jumps across the interface
+    drho = rho_R - rho_L
+    dp   = p_R   - p_L
+    dvel = vel_R - vel_L
+    dun  = np.sum(dvel * normal, axis=-1)  # normal velocity jump
+    dvt  = dvel - dun[..., None] * normal  # tangential velocity jump
+
+    # Compute wave strengths
+    inv_c2 = 1.0 / (c * c)
+    a_acoustic_minus = 0.5 * (dp - rho * c * dun) * inv_c2   # wave with eigenvalue un - c
+    a_acoustic_plus  = 0.5 * (dp + rho * c * dun) * inv_c2   # wave with eigenvalue un + c
+    a_entropy        = drho - dp * inv_c2                    # entropy wave
+
+    # Compute the eigenvalues and add the smooth entropy fix
+    delta = _ROE_ENTROPY_FIX_EPS * (np.abs(un) + c)
+    abs_lam_minus = _harten_entropy_fix(un - c, delta)
+    abs_lam_plus  = _harten_entropy_fix(un + c, delta)
+    abs_lam_mid   = np.abs(un)
+
+    ##### Construct the dissipation terms #####
+
+    # Density component
+    d_rho = abs_lam_minus * a_acoustic_minus + \
+            abs_lam_mid   * a_entropy        + \
+            abs_lam_plus  * a_acoustic_plus
+    
+    # Momentum components. Acoustic eigenvectors contain vel +/- c*n, the middle field
+    # contains the entropy wave (alpha * vel) and the shear wave (rho * tangential jump)
+    d_mom = ((abs_lam_minus * a_acoustic_minus)[..., None] * (vel - c[..., None] * normal) +
+             (abs_lam_plus  * a_acoustic_plus )[..., None] * (vel + c[..., None] * normal) +
+             abs_lam_mid[..., None] * (a_entropy[..., None] * vel + rho[..., None] * dvt))
+    
+    # Energy component
+    d_E = (abs_lam_minus * a_acoustic_minus * (H - un * c) +
+           abs_lam_plus  * a_acoustic_plus  * (H + un * c) +
+           abs_lam_mid   * (0.5 * a_entropy * q2 + rho * np.sum(vel * dvt, axis=-1)))
+
+    return np.concatenate([d_rho[..., None], d_mom, d_E[..., None]], axis=-1)
+        
 def _roe_dissipation(q_minus : np.ndarray,
                      q_plus  : np.ndarray,
                      normal  : np.ndarray,
@@ -150,9 +262,7 @@ def _roe_dissipation(q_minus : np.ndarray,
             )
         
         case 'euler':
-            raise NotImplementedError(
-                "Roe dissipation not yet implemented — this is where the NSE/Euler Roe solver goes."
-            )
+            return _roe_dissipation_euler(q_minus, q_plus, normal, case_cfg)
         
         case 'navier-stokes':
             raise NotImplementedError(

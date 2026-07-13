@@ -8,14 +8,14 @@ physics:
   #Re             : 1000                # Reynolds number (if applicable)
   #Pr             : 0.71                # Prandtl number (if applicable)
   #mach_ref       : 1.0                 # Reference Mach number (if applicable)
-  riemann_solver : "LLF"              # Riemann solver used to compute element boundary fluxes
+  riemann_solver : "roe"              # Riemann solver used to compute element boundary fluxes
 
 # Specify the mesh-specific parameters.
 mesh:
   mesh_format: "HOHQMesh"           # Format the mesh file is written in
   mesh_file  : "./inputs/SquareBIG.mesh"  # Mesh file name (including the path if not in the same directory as this input file)
   ndim       : 2                    # Spatial dimensionality of the problem (1, 2, or 3)
-  poly_deg   : 8                    # Polynomial degree for solution approximation within each element
+  poly_deg   : 6                    # Polynomial degree for solution approximation within each element
   quad_type  : "LG"                 # Quadrature type: Legendre-Gauss (LG) or Legendre-Gauss-Lobatto (LGL)
 
 # Specify the time-stepping-specific parameters.
@@ -34,9 +34,9 @@ initialization:
 io:
   output_dir        : './outputs/'
   plot_uniform_grid : False
-  uniform_grid_res  : 500
+  uniform_grid_res  : 250
   output_format     : 'vtk'
-  output_interval   : 0.01
+  output_interval   : 0.05
   monitor_run       : False
 
 # Specify the boundary condition dictionary
