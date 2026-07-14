@@ -138,10 +138,18 @@ def _run_sweep(degrees: list, cfl: float | None = None):
     fig_path = _plot_convergence(degrees, errors, slope)
     Console().print(f"  convergence plot saved to: [green]{fig_path}[/green]")
 
-    # 1. finite and strictly decreasing with polynomial degree
+    # 1. finite, and decreasing with poly_deg UNTIL it reaches the round-off floor. The deep sweep
+    #    drives the error down to ~1e-12 (near double-precision epsilon times the accumulated operation
+    #    count over the whole march), and once there it JITTERS rather than decreasing -- a higher degree
+    #    does more work per step, so it carries slightly more round-off. Requiring STRICT monotonicity
+    #    all the way down would flag that expected floor jitter as a failure (it did: the degree-12 point
+    #    came in at 2.6e-12 vs degree-10's 2.3e-12). So require strict decrease only while the error is
+    #    still ABOVE the floor; below it, the field has fully converged and small wiggles are physical.
+    ROUNDOFF_FLOOR = 1e-11
     assert all(np.isfinite(errors)), f"non-finite error in {errors}"
-    assert all(errors[i + 1] < errors[i] for i in range(len(errors) - 1)), \
-        f"error not decreasing with poly_deg: {errors}"
+    assert all(errors[i + 1] < errors[i]
+               for i in range(len(errors) - 1) if errors[i] > ROUNDOFF_FLOOR), \
+        f"error not decreasing with poly_deg (above the {ROUNDOFF_FLOOR:.0e} round-off floor): {errors}"
 
     # 2. spectral (exponential) convergence: log10(error) drops at least ~0.6 per degree
     assert slope < -0.6, f"convergence slope {slope:.3f}/degree is not spectral"

@@ -28,10 +28,18 @@ def run_case(cfg: CaseCfg, case_dir: Path = Path('.')) -> None:
 
     Inputs:
     - cfg      : validated case configuration.
-    - case_dir : directory of the control file; mesh_file / IC_file are resolved relative to it.
+    - case_dir : directory of the control file; mesh_file / IC_file / source_file are resolved
+                 relative to it.
     '''
 
     case_dir = Path(case_dir)
+
+    # Resolve the source-term file relative to the control file's directory, exactly like mesh_file and
+    # IC_file below. Unlike those two (loaded here at the call site), the source term is loaded deep in
+    # the residual (add_source_terms, every RK stage), which never sees case_dir -- so we make the path
+    # absolute up front. Path join is a no-op if the user already gave an absolute path.
+    if cfg.source.source_method != 'none' and cfg.source.source_file is not None:
+        cfg.source.source_file = str(case_dir / cfg.source.source_file)
 
     ##### 1. Build the mesh #####
     mesh = mesh_class.Mesh()
