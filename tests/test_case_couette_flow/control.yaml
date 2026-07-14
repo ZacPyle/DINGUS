@@ -1,0 +1,62 @@
+# Compressible Couette flow: a wall-driven channel, and the validation case for the no-slip and
+# isothermal wall boundary conditions. See inputs/initial_condition_couette.py for the exact solution.
+name: "test_case_couette_flow"
+
+# Specify the physics-specific parameters.
+physics:
+  model          : "navier-stokes"  # PDE(s) you wish to approximate.
+  gamma          : 1.4              # Ratio of specific heats
+  Re             : 10               # Reynolds number. Low on purpose: the steady state is reached in
+                                    # t ~ Re/pi^2 ~ 1, which keeps the explicit relaxation run affordable.
+  Pr             : 0.71             # Prandtl number
+  mach_ref       : 0.5              # Reference Mach number. Also on purpose: the viscous-heating bump in
+                                    # T scales as M^2 U^2, so a low-Mach run would make it unmeasurable.
+                                    # The exact solution is fully compressible, so a high M costs nothing.
+  riemann_solver : "roe"            # Riemann solver used to compute element boundary fluxes
+
+# Specify the mesh-specific parameters.
+mesh:
+  mesh_format: "HOHQMesh"                  # Format the mesh file is written in
+  mesh_file  : "./inputs/NarrowChannel.mesh"  # Channel [0, 0.5] x [0, 1]; 2 elements in x, 4 in y.
+                                           # Couette is x-invariant, so elements in x buy nothing --
+                                           # the wall-normal (y) direction is where the resolution goes.
+  ndim       : 2                    # Spatial dimensionality of the problem (1, 2, or 3)
+  poly_deg   : 4                    # Polynomial degree for solution approximation within each element
+  quad_type  : "LG"                 # Quadrature type: Legendre-Gauss (LG) or Legendre-Gauss-Lobatto (LGL)
+
+# Specify the time-stepping-specific parameters.
+time_stepping:
+  time_integrator : "rk4"           # Time integration scheme.
+  cfl             : 0.8             # CFL number for stable, explicit time-stepping.
+  start_time      : 0.0             # start time of the simulation
+  final_time      : 6.0             # The viscous relaxation time is tau = H^2/(nu pi^2) = Re/pi^2 ~ 1.0,
+                                    # and a run started from rest approaches the steady profile as
+                                    # exp(-t/tau). 6 tau leaves a ~0.3% transient -- enough to assert the
+                                    # exact profile to ~1%, without paying for a longer explicit run.
+                                    # NOTE: the pytest relaxation test OVERRIDES this with its own value,
+                                    # so you can change the timing / io here for interactive runs freely.
+
+# Specify the initial condition parameters.
+initialization:
+  IC_method : "analytical"                             # 'analytical', 'datafile', or 'restart'
+  IC_file   : "./inputs/initial_condition_couette.py"  # Initializes with the EXACT steady solution.
+
+# Specify parameters for IO operations
+io:
+  output_dir        : './outputs/'
+  plot_uniform_grid : False
+  uniform_grid_res  : 250
+  output_format     : 'vtk'
+  output_interval   : 0.5
+  monitor_run       : False
+
+# Specify the boundary condition dictionary.
+#   Left/Right : periodic  -- the channel is homogeneous in x.
+#   Bottom     : a STATIONARY isothermal no-slip wall.
+#   Top        : an isothermal no-slip wall DRAGGED in +x at wall_velocity -- this is what drives the
+#                entire flow. Note it slides TANGENTIALLY: the wall is still impermeable.
+boundary_conditions:
+  Left   : {type: periodic, partner: Right}
+  Right  : {type: periodic, partner: Left }
+  Bottom : {type: isothermal_no_slip_wall, wall_temperature: 1.00}
+  Top    : {type: isothermal_no_slip_wall, wall_temperature: 1.05, wall_velocity: [1.0, 0.0]}

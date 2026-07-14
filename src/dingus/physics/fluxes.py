@@ -2,6 +2,7 @@
 
 from dingus.config import CaseCfg
 from dingus.physics.constitutiveRelations import compute_pressure
+from dingus.physics.viscousFluxes import compute_viscous_flux
 import numpy as np
 
 """
@@ -94,7 +95,7 @@ def max_wave_speed(sol: np.ndarray, case_cfg: CaseCfg) -> float:
         case 'scalar_advection':
             return float(np.linalg.norm(case_cfg.physics.advection_velocity))
 
-        case 'euler':
+        case 'euler'|'navier-stokes':
             # Extract density and momentum from solution vector
             rho      = sol[...,0]
             momentum = sol[...,1:-1]
@@ -107,11 +108,6 @@ def max_wave_speed(sol: np.ndarray, case_cfg: CaseCfg) -> float:
             # Compute the max wave speed (velocity_mag + speed of sound)
             return float(np.max(vel_mag + c))
         
-        case 'navier-stokes':
-            raise NotImplementedError(
-                f"max_wave_speed() not yet implemented for physics model '{case_cfg.physics.model}'."
-            )
-
         case _:
             raise ValueError(f"Unknown physics model: '{case_cfg.physics.model}'.")
 
@@ -137,17 +133,12 @@ def _max_abs_face_speed(q_minus : np.ndarray,
             a_n = normal @ a                              # (M,)
             return np.abs(a_n)[:, None]                   # (M, 1)
 
-        case 'euler':
+        case 'euler'|'navier-stokes':
             # compute the maximum wavespeed between the two faces using the interior (minus) and exterior (plus) states
             lam = np.maximum(_max_wave_speed_one_face_side(q_minus, normal, case_cfg),
                              _max_wave_speed_one_face_side(q_plus , normal, case_cfg))
             
             return lam[:, None]
-        
-        case 'navier-stokes':
-            raise NotImplementedError(
-                f"_max_abs_face_speed() not yet implemented for '{case_cfg.physics.model}'."
-            )
 
         case _:
             raise ValueError(f"Unknown physics model: '{case_cfg.physics.model}'.")
@@ -261,13 +252,8 @@ def _roe_dissipation(q_minus : np.ndarray,
                 "Roe solver is not meaningful for scalar advection; use 'upwind'/'rusanov' instead."
             )
         
-        case 'euler':
-            return _roe_dissipation_euler(q_minus, q_plus, normal, case_cfg)
-        
-        case 'navier-stokes':
-            raise NotImplementedError(
-                "Roe dissipation not yet implemented — this is where the NSE/Euler Roe solver goes."
-            )       
+        case 'euler'|'navier-stokes':
+            return _roe_dissipation_euler(q_minus, q_plus, normal, case_cfg)    
 
         case _:
             raise ValueError(f"Unknown physics model: '{case_cfg.physics.model}'.")
@@ -340,7 +326,30 @@ def _compute_euler_flux(sol : np.ndarray, case_cfg : CaseCfg) -> np.ndarray:
     
     return flux
 
-def compute_volume_flux(sol : np.ndarray, case_cfg : CaseCfg) -> np.ndarray:
+def compute_inviscid_flux(sol : np.ndarray, case_cfg : CaseCfg) -> np.ndarray:
+    '''
+    The INVISCID (hyperbolic) half of the physical flux for the active physics model. For
+    'navier-stokes' this is just the Euler flux -- the viscous flux is a separate, additive piece.
+
+    Kept separate from compute_volume_flux because the two halves need DIFFERENT treatment at an
+    interface: the inviscid half goes through the Riemann solver (central + upwind dissipation),
+    while the viscous half is averaged centrally (BR1 -- there is no upwind direction for diffusion)
+    and, at a wall, is replaced outright by a BC-specific flux. See compute_numerical_flux.
+
+    Inputs / Outputs mirror compute_volume_flux.
+    '''
+
+    match case_cfg.physics.model:
+        case 'scalar_advection':
+            return _compute_scalar_flux(sol, case_cfg)
+
+        case 'euler' | 'navier-stokes':
+            return _compute_euler_flux(sol, case_cfg)
+
+        case _:
+            raise ValueError(f"Unknown physics model detected in inviscid flux computation: '{case_cfg.physics.model}'.")
+
+def compute_volume_flux(sol : np.ndarray, case_cfg : CaseCfg, grad_q : np.ndarray | None = None) -> np.ndarray:
     '''
     Compute the physical (volume) flux F_vec of the governing equations at every quadrature node.
     The result carries one flux component per spatial dimension in the LAST axis: 
@@ -364,27 +373,22 @@ def compute_volume_flux(sol : np.ndarray, case_cfg : CaseCfg) -> np.ndarray:
     - flux : (..., num_eq, ndim) physical flux; flux[..., d] is the F_d component. 
     '''
 
-    # First, determine the physics model specified in the input configuration.
-    match case_cfg.physics.model:
-        case 'scalar_advection':
-            return _compute_scalar_flux(sol, case_cfg)
-            
-        case 'euler':
-            return _compute_euler_flux(sol, case_cfg)
-            
-        case 'navier-stokes':
-            raise NotImplementedError("Navier-Stokes volume flux computation not yet implemented!")
-            # TODO: Implement physical Navier-Stokes fluxes in each spatial direction. Do I need to separate
-            # inviscid and viscous fluxes? I don't think so.
-        
-        case _:
-            raise ValueError(f"Unknown physics model detected in volume flux computation: '{case_cfg.physics.model}'.")
-        
-def compute_numerical_flux(q_minus : np.ndarray,
-                           q_plus  : np.ndarray,
-                           normal  : np.ndarray,
-                           case_cfg: CaseCfg) -> np.ndarray:
-    
+    # The inviscid flux is common to every model; Navier-Stokes then subtracts the viscous flux.
+    flux = compute_inviscid_flux(sol, case_cfg)
+
+    if case_cfg.physics.model == 'navier-stokes':
+        flux = flux - compute_viscous_flux(sol, grad_q, case_cfg)
+
+    return flux
+
+def compute_numerical_flux(q_minus            : np.ndarray,
+                           q_plus             : np.ndarray,
+                           normal             : np.ndarray,
+                           case_cfg           : CaseCfg,
+                           grad_minus         : np.ndarray | None = None,
+                           grad_plus          : np.ndarray | None = None,
+                           viscous_normal_flux: np.ndarray | None = None) -> np.ndarray:
+
     '''
     Compute the NUMERICAL (interface) flux at a single face: a single-valued approximation to the 
     physical normal flux F_vec at the element interface(s). This is the DG analogue of a finite-volume
@@ -399,25 +403,39 @@ def compute_numerical_flux(q_minus : np.ndarray,
         upwind  : for LINEAR advection this equals LLF (rusanov) with D = |a.n| (exact upwinding)
         roe     : D = |A_Roe|      (matrix; equation-set specific -> see the function "_roe_dissipation")
 
-    Note: the sign convention MUST match the DG residual: 
+    For NAVIER-STOKES the flux carries a second, PARABOLIC half. It does NOT go through the Riemann
+    solver (diffusion has no upwind direction); BR1 simply averages it centrally:
+
+        F*.n  =  [ inviscid Riemann flux above ]  -  1/2 ( F_visc(q^-,g^-).n + F_visc(q^+,g^+).n )
+
+    At a WALL that central average is meaningless -- the exterior state there is a reflection built
+    for the Riemann solver, not a physical neighbour, and an adiabatic wall must additionally carry
+    zero normal heat flux. Callers therefore pass `viscous_normal_flux` to REPLACE the averaged
+    viscous term with a BC-specific one (see boundaryConditions.wall_viscous_normal_flux).
+
+    Note: the sign convention MUST match the DG residual:
     - q_minus is the trace from the "left" element (element that owns the face)
     - q_plus is the trace from the "right" element (element that does NOT own the face)
     - normal is the UNIT normal vector pointing OUT of the left element (toward the right element)
 
-    Inputs: 
+    Inputs:
     - q_minus : (..., num_eq) array of conserved variables from the left/owner element.
     - q_plus  : (..., num_eq) array of conserved variables from the right/neighbor element.
     - normal  : (..., ndim) array of unit normal vectors at the face, pointing outward of the left/owner element
     - case_cfg: case configuration (selects the physics model + parameters).
+    - grad_minus, grad_plus   : (..., num_eq, ndim) conserved-variable gradients from either side (NSE only).
+    - viscous_normal_flux     : (..., num_eq) optional OVERRIDE for the viscous normal flux F_visc.n at
+                                this face (NSE only). When given it is used verbatim, in place of the BR1
+                                central average of the two sides. This is how the wall BCs are imposed.
 
     Outputs:
-    - f_star_n : (..., num_eq) array of numerical fluxes at the face, projected onto the face normal. 
+    - f_star_n : (..., num_eq) array of numerical fluxes at the face, projected onto the face normal.
     '''
 
-    # The 'averaged' flux: reuse the physics flux, then dot with the face normal.
-    # compute_volume_flux returns (M, num_eq, ndim); contracting the ndim axis with `normal` gives F.n.
-    Fn_minus = np.einsum('med,md->me', compute_volume_flux(q_minus, case_cfg), normal)   # (M, num_eq)
-    Fn_plus  = np.einsum('med,md->me', compute_volume_flux(q_plus,  case_cfg), normal)   # (M, num_eq)
+    # --- Hyperbolic half: central average of the INVISCID flux + Riemann dissipation -------------
+    # compute_inviscid_flux returns (M, num_eq, ndim); contracting the ndim axis with `normal` gives F.n.
+    Fn_minus = np.einsum('med,md->me', compute_inviscid_flux(q_minus, case_cfg), normal)   # (M, num_eq)
+    Fn_plus  = np.einsum('med,md->me', compute_inviscid_flux(q_plus , case_cfg), normal)   # (M, num_eq)
     central  = 0.5 * (Fn_minus + Fn_plus)
 
     # Compute the dissipation term specific to the chosen Riemann solver
@@ -426,15 +444,26 @@ def compute_numerical_flux(q_minus : np.ndarray,
             # Scalar (Lax-Friedrichs / Rusanov) dissipation. For linear scalar advection physics models, this
             # reproduces EXACT upwinding with lam = |a.n|, the formula collapses to
             #   a.n * (q_minus if a.n >= 0 else q_plus).
-            lam = _max_abs_face_speed(q_minus, q_plus, normal, case_cfg)   # (M, 1)
-            return central - 0.5 * lam * (q_plus - q_minus)
+            lam    = _max_abs_face_speed(q_minus, q_plus, normal, case_cfg)   # (M, 1)
+            f_star = central - 0.5 * lam * (q_plus - q_minus)
 
         case 'roe':
             # Matrix dissipation; physics-specific (returns the full D.(q_plus - q_minus) already).
-            return central - 0.5 * _roe_dissipation(q_minus, q_plus, normal, case_cfg)
+            f_star = central - 0.5 * _roe_dissipation(q_minus, q_plus, normal, case_cfg)
 
         case _:
             raise ValueError(
                 f"Unknown Riemann solver: '{case_cfg.physics.riemann_solver}'. "
                 "Expected one of: 'upwind', 'LLF', 'roe'."
             )
+
+    # --- Parabolic half: BR1 central viscous flux, or the caller's wall override ------------------
+    if case_cfg.physics.model == 'navier-stokes':
+        if viscous_normal_flux is None:
+            Fv_minus            = np.einsum('med,md->me', compute_viscous_flux(q_minus, grad_minus, case_cfg), normal)
+            Fv_plus             = np.einsum('med,md->me', compute_viscous_flux(q_plus , grad_plus , case_cfg), normal)
+            viscous_normal_flux = 0.5 * (Fv_minus + Fv_plus)
+
+        f_star = f_star - viscous_normal_flux
+
+    return f_star

@@ -1,10 +1,12 @@
 # src/dingus/spatialOperators/residual.py
 
 import numpy as np
-from dingus.boundaryConditions.boundaryConditions import exterior_state
+from dingus.boundaryConditions.boundaryConditions import (exterior_state, gradient_exterior_state,
+                                                          is_wall, wall_viscous_normal_flux)
 from dingus.config import CaseCfg
 from dingus.mesh import mesh_class
 from dingus.physics import fluxes
+from dingus.sourceTerms.sourceTerms import add_source_terms
 
 '''
 This module computes the DG spatial residual, R = dq/dt, for every element. In other words, it computes
@@ -104,7 +106,24 @@ def _prolong_metric_to_face_2d(Ja: np.ndarray, face_id: int, I_min: np.ndarray, 
         
         case _:
             raise ValueError(f"Error in prolonging metrics to face along axis {facedata['axis']}.")
-        
+
+def _prolong_grad_to_face_2d(grad: np.ndarray, face_id: int,
+                             I_min: np.ndarray, I_max: np.ndarray) -> np.ndarray:
+    '''
+    Interpolate a (P+1, P+1, num_eq, ndim) gradient field to one face -> (P+1, num_eq, ndim).
+    Identical to _prolong_to_face_2d, but the trailing axis is now (num_eq, ndim) instead of just
+    num_eq, so the einsum gains a 'd' index.
+    '''
+    facedata = _FACE_2D[face_id]
+    I = I_min if facedata['side'] == 'min' else I_max
+    match facedata['axis']:
+        case 0:   # x-normal face
+            return np.einsum('mi,ijed->jed', I, grad)   # (P+1, num_eq, ndim)
+        case 1:   # y-normal face
+            return np.einsum('mj,ijed->ied', I, grad)   # (P+1, num_eq, ndim)
+        case _:
+            raise ValueError(f"Error prolonging gradient to face along axis {facedata['axis']}.")
+                
 def _lift_face_to_volume_2d(corr: np.ndarray, face_id: int,
                             I_min: np.ndarray, I_max: np.ndarray, w: np.ndarray) -> np.ndarray:
     '''
@@ -157,7 +176,7 @@ def _compute_divergence_1d(mesh : mesh_class.Mesh, case_cfg : CaseCfg) -> None:
         Ja1 = J[..., None] * e.contravar_xi    # shape (P+1, 2)
 
         # Compute the physical volume fluxes for the current solution
-        F_vec = fluxes.compute_volume_flux(q, case_cfg)  # shape (P+1, num_eq, 2)
+        F_vec = fluxes.compute_volume_flux(q, case_cfg, e.grad_q)  # shape (P+1, num_eq, 2)
 
         # Project the physical fluxes onto the contravariant basis vectors to get the 
         # contravariant flux terms.
@@ -188,7 +207,7 @@ def _compute_divergence_2d(mesh : mesh_class.Mesh, case_cfg : CaseCfg) -> None:
         Ja2 = J[..., None] * e.contravar_eta   # shape (P+1, P+1, 2)
 
         # Compute the physical volume fluxes for the current solution
-        F_vec = fluxes.compute_volume_flux(q, case_cfg)  # shape (P+1, P+1, num_eq, 2)
+        F_vec = fluxes.compute_volume_flux(q, case_cfg, e.grad_q)  # shape (P+1, P+1, num_eq, 2)
 
         # Project the physical fluxes onto the contravariant basis vectors to get the 
         # contravariant flux terms.
@@ -222,7 +241,7 @@ def _compute_divergence_3d(mesh : mesh_class.Mesh, case_cfg : CaseCfg) -> None:
         Ja3 = J[..., None] * e.contravar_zeta  # shape (P+1, P+1, P+1, 3)
 
         # Compute the physical volume fluxes for the current solution
-        F_vec = fluxes.compute_volume_flux(q, case_cfg)  # shape (P+1, P+1, P+1, num_eq, 3)
+        F_vec = fluxes.compute_volume_flux(q, case_cfg, e.grad_q)  # shape (P+1, P+1, P+1, num_eq, 3)
 
         # Project the physical fluxes onto the contravariant basis vectors to get the 
         # contravariant flux terms.
@@ -252,41 +271,64 @@ def _compute_surface_2d(mesh, case_cfg: CaseCfg, t: float = 0.0) -> None:
     normal sign.
     '''
     I_min, I_max, w = mesh.face_interp_min, mesh.face_interp_max, mesh.quad_weights
+    is_nse = case_cfg.physics.model == 'navier-stokes'      # only NSE needs face gradients
 
     for e in mesh.elements:
         for face_idx0, mort in enumerate(e.connected_mortars):
             face_id = face_idx0 + 1                            # 1-based face id
 
             # Interior trace: prolong THIS element's solution to the face
-            q_minus = _prolong_to_face_2d(e.solution, face_id, I_min, I_max)   # (P+1, num_eq)
+            q_minus    = _prolong_to_face_2d(e.solution, face_id, I_min, I_max)   # (P+1, num_eq)
+            grad_minus = _prolong_grad_to_face_2d(e.grad_q, face_id, I_min, I_max) if is_nse else None
 
             # Grab the outward normal for THIS element (stored normal is outward-from-left owner)
             left, right = mort.connected_elements
             owner  = left if left is not None else right       # matches _get_mortar_owner
             normal = mort.normal_vector if (e is owner) else -mort.normal_vector   # (P+1, 2)
 
-            # Get or compute the exterior trace: q_plus
+            # Get or compute the exterior trace: q_plus. `visc_override` stays None everywhere except
+            # at a WALL, where the BR1 central average of the viscous flux is not what we want: the
+            # wall's q_plus is a reflection built for the Riemann solver, not a physical neighbor, so
+            # averaging its viscous flux in would be meaningless. Walls hand the numerical flux an
+            # explicit viscous flux instead (built from the wall state + the interior gradient).
+            visc_override = None
+
             if None in mort.connected_elements:
-                if mort.boundary_condition.type == 'periodic':
+                bc = mort.boundary_condition
+                if bc.type == 'periodic':
                     # pull q_plus from the partner element across the domain (like an interior neighbor)
-                    q_plus = _prolong_to_face_2d(mort.periodic_partner_element.solution,
-                                                 mort.periodic_partner_face, I_min, I_max)
+                    partner, pface = mort.periodic_partner_element, mort.periodic_partner_face
+                    q_plus         = _prolong_to_face_2d(partner.solution, pface, I_min, I_max)
+                    grad_plus      = _prolong_grad_to_face_2d(partner.grad_q, pface, I_min, I_max) if is_nse else None
                 else:
-                    # boundary mortar, compute the ghost state from the BC dispatch
-                    q_plus = exterior_state(mort, q_minus, case_cfg, t)
+                    # boundary mortar, compute the ghost state from the BC dispatch. For a wall this is
+                    # the impermeability reflection (normal momentum flipped, pressure preserved) --
+                    # no-slip and the thermal condition are imposed through the viscous flux below.
+                    q_plus    = exterior_state(mort, q_minus, case_cfg, t, normal)
+                    grad_plus = grad_minus if is_nse else None
+
+                    if is_nse and is_wall(bc):
+                        # The real wall condition: viscous flux from the DIRICHLET wall state and the
+                        # INTERIOR gradient, with the wall-normal heat flux zeroed out if adiabatic,
+                        # PLUS the interior penalty that makes the weak Dirichlet imposition stable
+                        # (e.h_min sets the penalty's length scale).
+                        visc_override = wall_viscous_normal_flux(bc, q_minus, grad_minus, normal,
+                                                                 case_cfg, e.h_min)
             else:
                 # interior mortar, neighbor's trace at the SHARED face
                 neighbor      = right if (e is left) else left
                 nbr_face_id   = neighbor.connected_mortars.index(mort) + 1
                 q_plus        = _prolong_to_face_2d(neighbor.solution, nbr_face_id, I_min, I_max)
+                grad_plus     = _prolong_grad_to_face_2d(neighbor.grad_q, nbr_face_id, I_min, I_max) if is_nse else None
                 # NOTE: for this axis-aligned Square, the two elements order the shared face nodes
                 # identically, so no flip is needed. A general/curved mesh may require reversing
                 # q_plus (and the metric) to match node ordering -- assert/flag when you get there.
 
             # Compute the strong-form correction with the numerical and interior normal flux (physical)
-            f_star     = fluxes.compute_numerical_flux(q_minus, q_plus, normal, case_cfg)   # (P+1, num_eq)
+            f_star     = fluxes.compute_numerical_flux(q_minus, q_plus, normal, case_cfg,
+                                                       grad_minus, grad_plus, visc_override)   # (P+1, num_eq)
             f_interior = np.einsum('med,md->me',
-                                   fluxes.compute_volume_flux(q_minus, case_cfg), normal)   # (P+1, num_eq)
+                                   fluxes.compute_volume_flux(q_minus, case_cfg, grad_minus), normal)   # (P+1, num_eq)
 
             # surface scale S = |J a^i| at the face: prolong the metric vector and take its norm.
             Ja  = e.jacobian_det[..., None] * (e.contravar_xi if _FACE_2D[face_id]['axis'] == 0
@@ -364,9 +406,12 @@ def _compute_gradient_surface_2d(mesh, case_cfg: CaseCfg, t: float = 0.0) -> Non
                     q_plus = _prolong_to_face_2d(mort.periodic_partner_element.solution,
                                                  mort.periodic_partner_face, I_min, I_max)
                 else:
-                    # BR1 boundary trace: use the BC ghost state. (Wall gradient BCs are Phase 3;
-                    # for the periodic vortex verification mesh this branch is never hit.)
-                    q_plus = exterior_state(mort, q_minus, case_cfg, t)
+                    # BR1 boundary trace. At a WALL this is the mirror of the interior about the
+                    # Dirichlet wall state (q+ = 2 q_w - q-), chosen precisely so the central trace
+                    # below lands on q_w EXACTLY -- that is what makes no-slip / isothermal a hard
+                    # condition on grad(q) rather than a half-strength one. Every other BC just
+                    # reuses its inviscid ghost.
+                    q_plus = gradient_exterior_state(mort, q_minus, case_cfg, t, normal)
             else:
                 neighbor    = right if (e is left) else left
                 nbr_face_id = neighbor.connected_mortars.index(mort) + 1
@@ -399,7 +444,7 @@ def _compute_gradient_volume(mesh, case_cfg: CaseCfg) -> None:
     """
     Dimension-dispatch wrapper for the BR1 gradient VOLUME term. Writes J * grad(q) into e.grad_q
     for every element (the surface correction and 1/J scaling are applied afterward by
-    compute_gradient). Mirrors _compute_divergence.
+    _compute_gradient). Mirrors _compute_divergence.
     """
 
     # Create a dispatch dictionary to call the appropriate gradient-volume function by dimensionality.
@@ -432,7 +477,7 @@ def _compute_gradient_surface(mesh, case_cfg: CaseCfg, t: float = 0.0) -> None:
         raise NotImplementedError(f"Gradient surface term not implemented for dimensionality: {mesh.dim}")
     GRADIENT_SURFACE_DISPATCH[mesh.dim](mesh, case_cfg, t)
 
-def compute_gradient(mesh, case_cfg: CaseCfg, t: float = 0.0) -> None:
+def _compute_gradient(mesh, case_cfg: CaseCfg, t: float = 0.0) -> None:
     '''
     BR1 gradient wrapper. Writes the physical gradient g = grad(q) into e.grad_q for every element,
     shape (P+1, P+1, num_eq, ndim). Structure mirrors compute_residual:
@@ -508,13 +553,22 @@ def compute_residual(mesh : mesh_class.Mesh, case_cfg : CaseCfg, t : float=0.0) 
     - t         : time (used for unsteady boundary conditions, if applicable)
     """
 
+    # Only compute the solution gradient if required (aka if using navier-stokes model)
+    if case_cfg.physics.model == 'navier-stokes':
+        _compute_gradient(mesh, case_cfg, t)
+
     # Compute the divergence of the contravariant VOLUME fluxes and store in e.residual
     _compute_divergence(mesh, case_cfg)
 
     # Add the surface coupling terms to e.residual
     _compute_surface(mesh, case_cfg, t)
-    
+
     # Scale the residual by -1/J to satisfy the semi-discrete update equation
     for e in mesh.elements:
-        e.residual *= -e.jacobian_det_inv[..., None] 
+        e.residual *= -e.jacobian_det_inv[..., None]
+
+    # Finally, add any source term S(q, x, t):  q_t = -(1/J)[div F~] + S. This comes AFTER the -1/J
+    # scaling because S enters the PDE as a bare additive term -- it is the flux divergence, not the
+    # source, that carries the metric Jacobian. A no-op unless the case declares a source term.
+    add_source_terms(mesh, case_cfg, t)
     

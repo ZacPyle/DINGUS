@@ -161,6 +161,30 @@ class ICCfg(BaseModel):
 
         return self
     
+class SourceCfg(BaseModel):
+    # Define the parameters for a source term S in  q_t + div(F_vec) = S.
+    #
+    # A source term is the standard way to drive a flow that has no inflow to drive it. Two uses here:
+    #   - FORCED POISEUILLE : a periodic channel has no mean pressure drop, so the streamwise
+    #                         momentum is driven by a constant body force S = [0, G, 0, G*u] with
+    #                         G = -dp/dx. (A wall-driven flow like Couette needs NO source.)
+    #   - MMS               : pick an analytic q_exact, push it through the PDE, and whatever is left
+    #                         over IS the source term. Adding it makes q_exact an exact solution of the
+    #                         forced system, which is what turns a run into an order-of-accuracy test.
+    source_method : Literal['none','analytical'] = Field('none',
+                                                         description="Method for computing the source term. 'none' (default) solves the unforced equations; 'analytical' loads a user-defined function from source_file.")
+
+    source_file   : Optional[str]                = Field('source_term.py',
+                                                         description="File defining the source term, expected to contain a function 'source_term()'. Relative to the case YAML file. Only read when source_method is 'analytical'.")
+
+    @model_validator(mode='after')
+    def check_source_params(self) -> 'SourceCfg':
+        # Errors ---------------------------------------------
+        if self.source_method == 'analytical' and self.source_file is None:
+            raise ValueError("source_method 'analytical' requires a 'source_file' to be assigned!")
+
+        return self
+
 class BCCfg(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     # Define the parameters for a boundary condition. This class is intended to be used as a sub-model within the 
@@ -178,10 +202,16 @@ class BCCfg(BaseModel):
 
     partner : Optional[str]                    = Field(None, description='Opposite / partner boundary name (used in periodic boundaries)')
 
-    @field_validator('state',mode='before')
+    wall_temperature : Optional[float]         = Field(None, gt=0.0,
+                                                       description='Prescribed nondimensional wall temperature T_w = gamma * M_ref^2 * p_w / rho_w. Required for the isothermal wall BCs, ignored otherwise.')
+
+    wall_velocity    : Optional[np.ndarray]    = Field(None,
+                                                       description='Prescribed wall velocity vector (nondimensional). Only used by the no-slip wall BCs; defaults to a stationary wall (all zeros). A moving wall must slide TANGENTIALLY (e.g. the driven plate in Couette flow) -- the wall is always treated as impermeable.')
+
+    @field_validator('state','wall_velocity',mode='before')
     @classmethod
     def _coerce_state(cls, v):
-        # Force any boundary state to be read in as a numpy array.
+        # Force any boundary state / vector to be read in as a numpy array.
         return np.asarray(v, dtype=float) if v is not None else v
 
     # Create a validator to print errors and warnings related to the selected BC parameters.
@@ -190,11 +220,22 @@ class BCCfg(BaseModel):
         # Errors ---------------------------------------------
         if self.type == 'inflow' and self.state is None:
             raise ValueError("Inflow boundary condition requires a 'state' to be assigned!")
-        
+
         if self.type == 'periodic' and self.partner is None:
             raise ValueError("Periodic boundary condition requires a 'partner' boundary to be assigned!")
-        
+
+        if self.type.startswith('isothermal') and self.wall_temperature is None:
+            raise ValueError(f"The '{self.type}' boundary condition requires a 'wall_temperature' to be assigned!")
+
         # Warnings -------------------------------------------
+        if self.type.startswith('adiabatic') and self.wall_temperature is not None:
+            warnings.warn(f"'wall_temperature' was set on an '{self.type}' boundary; it is IGNORED "
+                          f"(an adiabatic wall carries no wall-normal heat flux, so its temperature is "
+                          f"determined by the solution, not prescribed).")
+
+        if self.wall_velocity is not None and 'no_slip' not in self.type:
+            warnings.warn(f"'wall_velocity' was set on a '{self.type}' boundary; it is IGNORED "
+                          f"(only the no-slip walls transfer a wall velocity to the fluid).")
 
         return self
     
@@ -271,6 +312,9 @@ class CaseCfg(BaseModel):
     
     io             : IOCfg            = Field(default_factory=IOCfg,
                                               description='IO configuration. Requres inputs that must be explicitly set within the io block of the case YAML file.')
+
+    source         : SourceCfg        = Field(default_factory=SourceCfg,
+                                              description='Source-term configuration. Defaults to no source term (the unforced equations).')
     
     boundary_conditions: Dict[str, BCCfg] = Field(default_factory=dict,
                                                   description='Dictionary containing strings of the BCs present in the mesh file as keys and a BCCfg object as the value. E.g. "domain_left: {type: inflow, state: [0.0]]"')
@@ -303,7 +347,7 @@ class CaseCfg(BaseModel):
 
         return self
 
-__all__ = ['PhysicsCfg', 'MeshCfg', 'TimeIntegratorCfg', 'ICCfg', 'IOCfg', 'CaseCfg']
+__all__ = ['PhysicsCfg', 'MeshCfg', 'TimeIntegratorCfg', 'ICCfg', 'IOCfg', 'BCCfg', 'SourceCfg', 'CaseCfg']
 
 def load_case_yaml(path) -> CaseCfg:
     """Load a YAML case file and return a validated `CaseCfg`.

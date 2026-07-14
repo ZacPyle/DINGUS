@@ -3,6 +3,7 @@
 import numpy as np
 from dingus.config import CaseCfg
 from dingus.physics import fluxes
+from dingus.physics.constitutiveRelations import compute_viscosity
 from dingus.spatialOperators.residual import compute_residual
 
 '''
@@ -66,15 +67,27 @@ def compute_dt(mesh, case_cfg: CaseCfg) -> float:
     # Extract the CFL from the case configuration object
     cfl = case_cfg.time_stepping.cfl
 
+    # Determine if viscous time scales come into play (aka is this a navier-stokes model)
+    is_nse = case_cfg.physics.model == 'navier-stokes'
+
     for e in mesh.elements:
-        # Grab the maximum wavespeed per element
-        lam = fluxes.max_wave_speed(e.solution, case_cfg) 
+        ##### Advective (inviscid) time step #####
+        # Grab the maximum wavespeed per element and compute the inviscid time step size
+        lam        = fluxes.max_wave_speed(e.solution, case_cfg) 
+        inv_dt_adv = lam * P_factor / e.h_min   
 
-        # grab the minimum length scale per element (computed in element metric procedures)
-        inv_len = 1.0 / e.h_min
+        ##### Diffusive (invisid) time step #####
+        inv_dt_visc = 0.0
+        if is_nse:
+            rho    = e.solution[..., 0]
+            mu     = compute_viscosity(e.solution, case_cfg)
+            nu_max = np.max( mu / (rho * case_cfg.physics.Re)) * \
+                     max(4.0 / 3.0, case_cfg.physics.gamma / case_cfg.physics.Pr)
+            
+            inv_dt_visc = nu_max * P_factor**2 / e.h_min**2
 
-        # compute dt based on the element, only save if it is smaller than previous dt
-        inv_dt = max(inv_dt, lam * P_factor * inv_len)    
+        # use the smallest time step: inviscid or viscous
+        inv_dt = max(inv_dt, inv_dt_adv + inv_dt_visc)
 
     # Compute the time step estimate
     dt = cfl / inv_dt
