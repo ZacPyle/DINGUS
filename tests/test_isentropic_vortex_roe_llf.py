@@ -50,7 +50,7 @@ FIG_DIR   = CASE_DIR / "outputs" / "figures"
 VORTEX_FINAL_TIME = 0.1
 
 # Polynomial degrees to sweep. P=2,3 sit above the boundary floor (resolved regime); P=4,5 reach it.
-DEGREES = [2, 3, 4]
+DEGREES = [2, 3, 4, 5, 6]
 
 # Error level above which the L2 error is dominated by discretization/dissipation rather than the
 # ~1e-5 analytic-periodicity boundary floor. Only in this regime is the LLF-vs-Roe ordering physical.
