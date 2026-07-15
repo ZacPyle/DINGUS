@@ -47,7 +47,17 @@ class PhysicsCfg(BaseModel):
     riemann_solver     : Literal['upwind',
                                  'LLF'   ,
                                  'roe'   ]    = Field('LLF', description='Riemann solver to use for flux computations. Default is "LLF".')
-    
+
+    viscosity_model    : Literal['constant',
+                                 'sutherland'] = Field('constant',
+                                                    description="Dynamic-viscosity model. 'constant' (mu* = 1) isolates the discretization for verification; 'sutherland' makes mu* temperature-dependent (needs ref_temperature).")
+
+    ref_temperature    : Optional[float]      = Field(None, gt=0.0,
+                                                    description="DIMENSIONAL reference temperature (Kelvin) corresponding to the nondimensional T* = 1 state. Required for viscosity_model='sutherland': with sutherland_constant it sets S* = sutherland_constant / ref_temperature.")
+
+    sutherland_constant : float               = Field(110.4, gt=0.0,
+                                                    description="DIMENSIONAL Sutherland temperature S (Kelvin) in Sutherland's law. Defaults to 110.4 K (air); override for other gases. The nondimensional constant used in the viscosity law is S* = sutherland_constant / ref_temperature.")
+
     # Create a validator to coerce the advection_velocity field into a numpy array if it is provided as a list or other iterable.
     @field_validator('advection_velocity', mode='before')
     @classmethod
@@ -61,7 +71,11 @@ class PhysicsCfg(BaseModel):
         # Errors ----------------------------------------------
         if self.model == 'navier-stokes' and self.Re is None:
             raise ValueError("Re (Reynolds number) must be specified when 'navier-stokes' is selected as the governing equation.")
-        
+
+        if self.viscosity_model == 'sutherland' and self.ref_temperature is None:
+            raise ValueError("viscosity_model='sutherland' requires 'ref_temperature' (dimensional, Kelvin) "
+                             "to set the nondimensional Sutherland constant S* = 110.4 / ref_temperature.")
+
         # Warnings --------------------------------------------
         if self.model == 'navier-stokes':
             if 'Pr' not in self.model_fields_set:

@@ -67,16 +67,33 @@ def compute_viscosity(input_sol: np.ndarray, case_cfg: CaseCfg) -> np.ndarray:
     '''
     Dimensionless dynamic viscosity mu* = mu / mu_ref, shape = sol.shape[:-1] (one per node).
 
-    Constant model (mu* = 1) for now -- it isolates the discretization from the viscosity model
-    during verification (MMS / Taylor-Green). Sutherland is a drop-in replacement later:
+    Two models, selected by case_cfg.physics.viscosity_model:
 
-        T  = compute_temperature(sol, case_cfg)            # T* = T / T_inf
-        S  = 110.4 / T_ref                                 # needs a reference T_ref (dimensional)
-        mu = T**1.5 * (1.0 + S) / (T + S)                  # nondimensional Sutherland's law
+    - 'constant'   : mu* = 1 everywhere. Isolates the discretization from the viscosity model during
+                     verification (the MMS and Taylor-Green tests assume it).
 
-    Kept as its own function so that swap is a one-line change (see the viscosity_model config
-    toggle planned on the roadmap).
+    - 'sutherland' : mu* increases with temperature per Sutherland's law, in nondimensional form
+
+                        mu* = (T*)^(3/2) * (1 + S*) / (T* + S*),   S* = sutherland_constant / ref_temperature
+
+                     where T* = T / T_ref is the nondimensional temperature (compute_temperature),
+                     sutherland_constant is the DIMENSIONAL Sutherland temperature S (110.4 K for air,
+                     configurable), and ref_temperature is the DIMENSIONAL temperature at T* = 1. By
+                     construction mu* = 1 at T* = 1, so it is consistent with the mu_ref used in the
+                     nondimensionalization (Re, Pr all reference this same mu_ref).
+
+    Because every viscous quantity (the stress tensor, the heat-flux coefficient kappa, and the viscous
+    dt limit) reads mu through THIS function, switching the model here propagates everywhere automatically.
     '''
 
-    rho = input_sol[..., 0]
-    return np.ones_like(rho)
+    match case_cfg.physics.viscosity_model:
+        case 'constant':
+            return np.ones_like(input_sol[..., 0])
+
+        case 'sutherland':
+            T_star = compute_temperature(input_sol, case_cfg)                            # T* = T / T_ref
+            S_star = case_cfg.physics.sutherland_constant / case_cfg.physics.ref_temperature   # nondim S*
+            return T_star**1.5 * (1.0 + S_star) / (T_star + S_star)
+
+        case _:
+            raise ValueError(f"Unknown viscosity_model: '{case_cfg.physics.viscosity_model}'.")
