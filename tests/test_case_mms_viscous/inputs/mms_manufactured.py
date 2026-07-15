@@ -133,6 +133,15 @@ def initial_condition(case_config, x, y) -> np.ndarray:
     return exact_solution(case_config, x, y)
 
 
+def boundary_state(case_config, x, y, t) -> np.ndarray:
+    '''
+    The prescribed-BC boundary state = the manufactured solution at the face nodes, shape (..., 4).
+    Used by the Dirichlet-MMS test, which imposes q_exact on the boundary via `prescribed` BCs to
+    exercise the boundary operator. Steady, so t is ignored; the extra arg matches the BC signature.
+    '''
+    return exact_solution(case_config, x, y)
+
+
 def source_term(case_config, q, x, y, t) -> np.ndarray:
     '''
     The manufactured source S = div(F(q_exact)), shape (..., 4). It is a fixed function of space (the

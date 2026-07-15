@@ -1,6 +1,8 @@
 # src/dingus/boundaryConditions/boundaryConditions.py
 
+import importlib.util
 import numpy as np
+from pathlib import Path
 from dingus.config import BCCfg, CaseCfg
 from dingus.mesh import mortar_class
 from dingus.physics.constitutiveRelations import compute_temperature
@@ -113,6 +115,97 @@ def is_wall(bc: BCCfg) -> bool:
     '''True if this boundary condition is one of the four wall types.'''
     return bc.type in _WALL_TYPES
 
+# ---------------------------------------------------------------------------------------------
+# Prescribed-state (full Dirichlet) boundary conditions
+# ---------------------------------------------------------------------------------------------
+# Two BC types impose a FULL exterior state as the ghost, differing only in HOW that state is supplied:
+#   uniform_inflow : a CONSTANT state, given directly as bc.state.
+#   prescribed     : a spatio-temporally VARYING state g(x, t), from a user function boundary_state().
+# Both then feed the SAME machinery: inviscid ghost = target; gradient ghost = 2*target - q^- (so the
+# BR1 central trace lands on the target exactly); and, for NSE, the viscous flux + interior penalty
+# built around the target (prescribed_viscous_normal_flux). A prescribed BC is, in effect, a "wall"
+# whose target state is an arbitrary user function instead of the impermeable wall reflection -- which
+# is why it reuses wall_penalty_sigma and the shared _dirichlet_viscous_normal_flux core below.
+_PRESCRIBED_TYPES = ('uniform_inflow', 'prescribed')
+
+# The user's boundary_state module is imported ONCE and cached, keyed by (file, function name): the
+# surface term calls it every RK stage, so re-importing per call would dominate the runtime. Mirrors
+# sourceTerms._load_source_function.
+_BOUNDARY_FN_CACHE: dict = {}
+
+def is_prescribed(bc: BCCfg) -> bool:
+    '''True if this BC imposes a full prescribed exterior state (uniform_inflow or prescribed).'''
+    return bc.type in _PRESCRIBED_TYPES
+
+def _load_boundary_function(state_file, state_function: str):
+    '''
+    Dynamically load `state_function` (default 'boundary_state') from the user's state_file, cached.
+    Mirrors sourceTerms._load_source_function. state_file must already be an absolute/resolvable path
+    (the runner resolves it relative to the case directory, exactly as it does for source_file).
+    '''
+    state_file = Path(state_file)
+    key        = (str(state_file.resolve()) if state_file.is_file() else str(state_file), state_function)
+
+    if key in _BOUNDARY_FN_CACHE:
+        return _BOUNDARY_FN_CACHE[key]
+
+    if not state_file.is_file():
+        raise FileNotFoundError(f"Boundary state file not found! Specified path is: '{state_file}'")
+
+    spec = importlib.util.spec_from_file_location("user_boundary_state", state_file)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not load a module spec from the boundary state file: '{state_file}'")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    if not hasattr(module, state_function):
+        raise AttributeError(f"No function '{state_function}()' found in: '{state_file}'")
+
+    fn = getattr(module, state_function)
+    _BOUNDARY_FN_CACHE[key] = fn
+    return fn
+
+def prescribed_target_state(bc         : BCCfg              ,
+                            q_minus    : np.ndarray         ,
+                            face_coords: np.ndarray | None  ,
+                            case_cfg   : CaseCfg            ,
+                            t          : float=0.0          ) -> np.ndarray:
+    '''
+    The full state the BC imposes at the face nodes, shape (M, num_eq).
+
+    - uniform_inflow : broadcast the constant bc.state (face_coords unused).
+    - prescribed     : evaluate the user's boundary_state(cfg, x, y, t) at the face-node coordinates.
+
+    Inputs:
+    - bc          : the BCCfg (uniform_inflow or prescribed).
+    - q_minus     : (M, num_eq) interior face trace (used for shape / broadcasting).
+    - face_coords : (M, ndim) physical coordinates of the face nodes. Required for 'prescribed'.
+    - case_cfg    : validated case configuration.
+    - t           : current time (for unsteady prescribed BCs).
+    '''
+
+    if bc.type == 'uniform_inflow':
+        return np.ones_like(q_minus) * bc.state
+
+    # prescribed: evaluate the user function at the face-node coordinates.
+    if face_coords is None:
+        raise ValueError("A 'prescribed' boundary condition needs the face-node coordinates, but "
+                         "prescribed_target_state was called without them.")
+
+    fn   = _load_boundary_function(bc.state_file, bc.state_function)
+    ndim = case_cfg.mesh.ndim
+    match ndim:
+        case 1:
+            state = fn(case_cfg, face_coords[..., 0], t)
+        case 2:
+            state = fn(case_cfg, face_coords[..., 0], face_coords[..., 1], t)
+        case 3:
+            state = fn(case_cfg, face_coords[..., 0], face_coords[..., 1], face_coords[..., 2], t)
+        case _:
+            raise ValueError(f"Unsupported dimensionality for a prescribed boundary: {ndim}")
+
+    return np.asarray(state, dtype=float)
+
 def wall_state(bc       : BCCfg     ,
                q_minus  : np.ndarray,
                normal   : np.ndarray,
@@ -214,41 +307,78 @@ def wall_viscous_normal_flux(bc        : BCCfg     ,
     '''
 
     q_wall = wall_state(bc, q_minus, normal, case_cfg)                              # (M, num_eq)
+    return _dirichlet_viscous_normal_flux(q_wall, q_minus, grad_minus, normal, case_cfg, h_elem,
+                                          remove_normal_heat=bc.type.startswith('adiabatic'))
 
-    # Viscous flux from the wall state + the interior gradient, projected onto the normal
-    Fv_n = np.einsum('med,md->me', compute_viscous_flux(q_wall, grad_minus, case_cfg), normal)
+def _dirichlet_viscous_normal_flux(target            : np.ndarray,
+                                   q_minus           : np.ndarray,
+                                   grad_minus        : np.ndarray,
+                                   normal            : np.ndarray,
+                                   case_cfg          : CaseCfg   ,
+                                   h_elem            : float     ,
+                                   remove_normal_heat: bool = False) -> np.ndarray:
+    '''
+    The viscous normal flux F_visc.n for ANY full-state Dirichlet boundary, given the TARGET state the
+    boundary imposes (a wall state, or a prescribed g). Shared by wall_viscous_normal_flux and
+    prescribed_viscous_normal_flux -- a wall is just a Dirichlet BC whose target is the impermeable
+    reflection, and everything downstream of "what state does the boundary impose" is identical:
 
-    if bc.type.startswith('adiabatic'):
+        F_visc*.n = F_v(target, grad^-).n  -  sigma (q^- - target)     [ - normal heat flux if adiabatic ]
+
+    The flux uses the TARGET state with the INTERIOR gradient (BR1's boundary recipe); the penalty
+    -sigma(q^- - target) supplies the dissipation that a weakly-imposed Dirichlet BC needs to be stable
+    (see the _WALL_PENALTY note). remove_normal_heat zeroes k dT/dn for an adiabatic wall (a prescribed
+    BC prescribes T, so it conducts normally and never sets this).
+    '''
+    Fv_n = np.einsum('med,md->me', compute_viscous_flux(target, grad_minus, case_cfg), normal)
+
+    if remove_normal_heat:
         # Remove the wall-normal heat flux: k dT/dn = 0. The energy equation is the last slot.
-        q_heat        = compute_heat_flux(q_wall, grad_minus, case_cfg)             # (M, ndim)
+        q_heat        = compute_heat_flux(target, grad_minus, case_cfg)             # (M, ndim)
         Fv_n[..., -1] = Fv_n[..., -1] - np.sum(q_heat * normal, axis=-1)
 
-    # Interior penalty: dissipatively drive the interior trace onto the wall state. The sign is set by
-    # the strong form -- the residual adds -(1/J) S (f* - f_int) with f* = f_inviscid* - F_visc*.n, so
-    # SUBTRACTING sigma (q^- - q_wall) here puts +sigma (q^- - q_wall) into (f* - f_int) and hence
-    # -sigma (q^- - q_wall) into dq/dt: restoring, as required.
+    # Interior penalty: dissipatively drive the interior trace onto the target. The sign is set by the
+    # strong form -- the residual adds -(1/J) S (f* - f_int) with f* = f_inviscid* - F_visc*.n, so
+    # SUBTRACTING sigma (q^- - target) here puts -sigma (q^- - target) into dq/dt: restoring, as required.
     sigma = wall_penalty_sigma(q_minus, case_cfg, h_elem)                           # (M,)
-    Fv_n  = Fv_n - sigma[:, None] * (q_minus - q_wall)
+    return Fv_n - sigma[:, None] * (q_minus - target)
 
-    return Fv_n
+def prescribed_viscous_normal_flux(bc         : BCCfg            ,
+                                   q_minus    : np.ndarray       ,
+                                   grad_minus : np.ndarray       ,
+                                   normal     : np.ndarray       ,
+                                   case_cfg   : CaseCfg          ,
+                                   h_elem     : float            ,
+                                   face_coords: np.ndarray | None,
+                                   t          : float=0.0        ) -> np.ndarray:
+    '''
+    The viscous normal flux F_visc.n at a prescribed-state (uniform_inflow / prescribed) boundary,
+    used in place of the BR1 central average -- the analogue of wall_viscous_normal_flux, with the
+    prescribed target g in place of the wall state and no heat-flux removal (a prescribed BC sets T).
+    '''
+    target = prescribed_target_state(bc, q_minus, face_coords, case_cfg, t)
+    return _dirichlet_viscous_normal_flux(target, q_minus, grad_minus, normal, case_cfg, h_elem,
+                                          remove_normal_heat=False)
 
-def exterior_state(mort     : mortar_class.SpectralMortar,
-                   q_minus  : np.ndarray                 ,
-                   case_cfg : CaseCfg                    ,
-                   t        : float=0.0                  ,
-                   normal   : np.ndarray | None = None   ) -> np.ndarray:
+def exterior_state(mort       : mortar_class.SpectralMortar,
+                   q_minus    : np.ndarray                 ,
+                   case_cfg   : CaseCfg                    ,
+                   t          : float=0.0                  ,
+                   normal     : np.ndarray | None = None   ,
+                   face_coords: np.ndarray | None = None   ) -> np.ndarray:
     '''
     Returns the exterior ("ghost") state q_plus at a boundary mortar, to be paired with the
     interior trace q_minus in the numerical flux. This is the ghost for the INVISCID (Riemann)
     flux -- the BR1 gradient pass uses `gradient_exterior_state` instead.
 
     Inputs:
-    - mort     : the boundary SpectralMortar
-    - q_minus  : (P+1, num_eq) interior face trace at the P+1 face nodes.
-    - case_cfg : validated case configuration.
-    - t        : current time (Only required for unsteady boundary conditions).
-    - normal   : (P+1, ndim) OUTWARD unit normal at the face. Required by the wall BCs, which must
-                 know which momentum component to reflect.
+    - mort        : the boundary SpectralMortar
+    - q_minus     : (P+1, num_eq) interior face trace at the P+1 face nodes.
+    - case_cfg    : validated case configuration.
+    - t           : current time (Only required for unsteady boundary conditions).
+    - normal      : (P+1, ndim) OUTWARD unit normal at the face. Required by the wall BCs, which must
+                    know which momentum component to reflect.
+    - face_coords : (P+1, ndim) physical coordinates of the face nodes. Required by 'prescribed'.
 
     Outputs:
     - q_plus   : (P+1, num_eq) exterior state.
@@ -258,9 +388,9 @@ def exterior_state(mort     : mortar_class.SpectralMortar,
     bc = mort.boundary_condition
 
     match bc.type:
-        case 'inflow':
-            # A prescribed incoming state.
-            q_plus = np.ones_like(q_minus) * bc.state  # works for any number of equations and nodes
+        case 'uniform_inflow' | 'prescribed':
+            # Full-state Dirichlet: the ghost IS the prescribed state (constant, or a user function).
+            q_plus = prescribed_target_state(bc, q_minus, face_coords, case_cfg, t)
 
         case 'outflow':
             # The exterior state equals the interior state, so the numerical flux reduces to
@@ -303,26 +433,27 @@ def exterior_state(mort     : mortar_class.SpectralMortar,
 
     return q_plus
 
-def gradient_exterior_state(mort     : mortar_class.SpectralMortar,
-                            q_minus  : np.ndarray                 ,
-                            case_cfg : CaseCfg                    ,
-                            t        : float=0.0                  ,
-                            normal   : np.ndarray | None = None   ) -> np.ndarray:
+def gradient_exterior_state(mort       : mortar_class.SpectralMortar,
+                            q_minus    : np.ndarray                 ,
+                            case_cfg   : CaseCfg                    ,
+                            t          : float=0.0                  ,
+                            normal     : np.ndarray | None = None   ,
+                            face_coords: np.ndarray | None = None   ) -> np.ndarray:
     '''
     Returns the exterior state used by the BR1 GRADIENT pass at a boundary mortar.
 
-    The gradient pass builds the central trace q* = 1/2 (q- + q+) and lifts (q* - q-). For a wall we
-    want that trace to BE the Dirichlet wall state -- that is what makes no-slip / isothermal an exact
-    condition on grad(q) rather than a half-strength suggestion. So we hand back the mirror of the
-    interior trace about the wall state:
+    The gradient pass builds the central trace q* = 1/2 (q- + q+) and lifts (q* - q-). For a Dirichlet
+    boundary we want that trace to BE the imposed state (the wall state, or the prescribed g) -- that is
+    what makes the condition exact on grad(q) rather than a half-strength suggestion. So we hand back the
+    mirror of the interior trace about the target state:
 
-        q+ = 2 q_w - q-      =>      q* = 1/2 (q- + q+) = q_w   exactly.
+        q+ = 2 q_target - q-      =>      q* = 1/2 (q- + q+) = q_target   exactly.
 
     This mirror is ONLY safe here: its energy component can imply a negative pressure (it is a
     reflection in CONSERVED variables), which would break the Riemann solver. The inviscid flux gets
-    the pressure-preserving reflection from `exterior_state` instead.
+    the pressure-preserving reflection (walls) or the raw target (prescribed) from `exterior_state`.
 
-    Every non-wall BC has nothing extra to say about the gradient, so it reuses its inviscid ghost.
+    BCs with nothing extra to say about the gradient (outflow) reuse their inviscid ghost.
 
     Inputs / Outputs mirror `exterior_state`.
     '''
@@ -338,4 +469,8 @@ def gradient_exterior_state(mort     : mortar_class.SpectralMortar,
         q_wall = wall_state(bc, q_minus, normal, case_cfg)
         return 2.0 * q_wall - q_minus
 
-    return exterior_state(mort, q_minus, case_cfg, t, normal)
+    if is_prescribed(bc):
+        target = prescribed_target_state(bc, q_minus, face_coords, case_cfg, t)
+        return 2.0 * target - q_minus
+
+    return exterior_state(mort, q_minus, case_cfg, t, normal, face_coords)

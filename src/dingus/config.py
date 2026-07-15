@@ -189,7 +189,18 @@ class BCCfg(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     # Define the parameters for a boundary condition. This class is intended to be used as a sub-model within the 
     # CaseCfg class, where a list of BCCfg objects can be defined for each boundary in the simulation domain.
-    type : Literal['inflow'                 ,
+    # Note on naming: the WALL types are ALSO mathematically Dirichlet conditions (no-slip prescribes
+    # the velocity, isothermal prescribes the temperature). So the full-state Dirichlet BC is called
+    # 'prescribed' rather than 'dirichlet' -- it names HOW the state is supplied (the user prescribes it
+    # via a function), not the mathematical class, which would be ambiguous against the walls.
+    #   uniform_inflow : a CONSTANT prescribed state, given directly as `state`.
+    #   prescribed     : a spatio-temporally VARYING prescribed state g(x, t), given as a function in
+    #                    `state_file` (see boundaryConditions.prescribed_state). Same machinery as
+    #                    uniform_inflow -- both impose a full-state ghost -- only the source of the state
+    #                    differs. Correct for MMS and SUPERSONIC inflow; reflective at a subsonic inflow
+    #                    (which wants the characteristic 'constant_pressure' treatment instead).
+    type : Literal['uniform_inflow'         ,
+                   'prescribed'             ,
                    'outflow'                ,
                    'periodic'               ,
                    'adiabatic_slip_wall'    ,
@@ -197,8 +208,14 @@ class BCCfg(BaseModel):
                    'isothermal_slip_wall'   ,
                    'isothermal_no_slip_wall',
                    'constant_pressure'       ] = Field(... , description='Boundary condition type.')
-    
-    state   : Optional[np.ndarray]             = Field(None, description='Prescribed boundary state (solution values at boundary nodes).')
+
+    state   : Optional[np.ndarray]             = Field(None, description='Constant prescribed boundary state (conserved variables). Required for uniform_inflow.')
+
+    state_file     : Optional[str]             = Field('prescribed_state.py',
+                                                       description="File defining the boundary state for a 'prescribed' BC, expected to contain a function `boundary_state(cfg, x, y, t)`. Relative to the case YAML file.")
+
+    state_function : Optional[str]             = Field('boundary_state',
+                                                       description="Name of the function to call in state_file. Defaults to 'boundary_state'. Override it to keep several boundary profiles in one file and point different faces at different functions.")
 
     partner : Optional[str]                    = Field(None, description='Opposite / partner boundary name (used in periodic boundaries)')
 
@@ -218,8 +235,11 @@ class BCCfg(BaseModel):
     @model_validator(mode='after')
     def check_BC_params(self) -> 'BCCfg':
         # Errors ---------------------------------------------
-        if self.type == 'inflow' and self.state is None:
-            raise ValueError("Inflow boundary condition requires a 'state' to be assigned!")
+        if self.type == 'uniform_inflow' and self.state is None:
+            raise ValueError("uniform_inflow boundary condition requires a constant 'state' to be assigned!")
+
+        if self.type == 'prescribed' and self.state_file is None:
+            raise ValueError("prescribed boundary condition requires a 'state_file' (defining boundary_state()).")
 
         if self.type == 'periodic' and self.partner is None:
             raise ValueError("Periodic boundary condition requires a 'partner' boundary to be assigned!")
@@ -317,7 +337,7 @@ class CaseCfg(BaseModel):
                                               description='Source-term configuration. Defaults to no source term (the unforced equations).')
     
     boundary_conditions: Dict[str, BCCfg] = Field(default_factory=dict,
-                                                  description='Dictionary containing strings of the BCs present in the mesh file as keys and a BCCfg object as the value. E.g. "domain_left: {type: inflow, state: [0.0]]"')
+                                                  description='Dictionary containing strings of the BCs present in the mesh file as keys and a BCCfg object as the value. E.g. "domain_left: {type: uniform_inflow, state: [1.0, 0.0, 0.0, 2.5]"')
     
     misc: Dict[str, Any]     = Field(default_factory=dict,                                 # Miscellaneous user-defined parameters.
         description="Optional miscellaneous user-defined parameters.")

@@ -41,6 +41,12 @@ def run_case(cfg: CaseCfg, case_dir: Path = Path('.')) -> None:
     if cfg.source.source_method != 'none' and cfg.source.source_file is not None:
         cfg.source.source_file = str(case_dir / cfg.source.source_file)
 
+    # Same for any 'prescribed' boundary condition: its state_file is loaded deep in the residual
+    # (which never sees case_dir), so make it absolute up front.
+    for bc in cfg.boundary_conditions.values():
+        if bc.type == 'prescribed' and bc.state_file is not None:
+            bc.state_file = str(case_dir / bc.state_file)
+
     ##### 1. Build the mesh #####
     mesh = mesh_class.Mesh()
     mesh.read_mesh(case_dir / cfg.mesh.mesh_file)

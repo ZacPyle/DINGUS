@@ -2,7 +2,9 @@
 
 import numpy as np
 from dingus.boundaryConditions.boundaryConditions import (exterior_state, gradient_exterior_state,
-                                                          is_wall, wall_viscous_normal_flux)
+                                                          is_wall, is_prescribed,
+                                                          wall_viscous_normal_flux,
+                                                          prescribed_viscous_normal_flux)
 from dingus.config import CaseCfg
 from dingus.mesh import mesh_class
 from dingus.physics import fluxes
@@ -302,9 +304,12 @@ def _compute_surface_2d(mesh, case_cfg: CaseCfg, t: float = 0.0) -> None:
                     grad_plus      = _prolong_grad_to_face_2d(partner.grad_q, pface, I_min, I_max) if is_nse else None
                 else:
                     # boundary mortar, compute the ghost state from the BC dispatch. For a wall this is
-                    # the impermeability reflection (normal momentum flipped, pressure preserved) --
-                    # no-slip and the thermal condition are imposed through the viscous flux below.
-                    q_plus    = exterior_state(mort, q_minus, case_cfg, t, normal)
+                    # the impermeability reflection (normal momentum flipped, pressure preserved); for a
+                    # prescribed BC it is the imposed state itself. A prescribed BC needs the physical
+                    # coordinates of the face nodes, so prolong them the same way as the solution.
+                    face_coords = (_prolong_metric_to_face_2d(e.quad_node_coords, face_id, I_min, I_max)
+                                   if is_prescribed(bc) else None)
+                    q_plus    = exterior_state(mort, q_minus, case_cfg, t, normal, face_coords)
                     grad_plus = grad_minus if is_nse else None
 
                     if is_nse and is_wall(bc):
@@ -314,6 +319,11 @@ def _compute_surface_2d(mesh, case_cfg: CaseCfg, t: float = 0.0) -> None:
                         # (e.h_min sets the penalty's length scale).
                         visc_override = wall_viscous_normal_flux(bc, q_minus, grad_minus, normal,
                                                                  case_cfg, e.h_min)
+                    elif is_nse and is_prescribed(bc):
+                        # Same story for a prescribed Dirichlet BC: the viscous flux is built from the
+                        # imposed state + interior gradient, plus the stabilizing interior penalty.
+                        visc_override = prescribed_viscous_normal_flux(bc, q_minus, grad_minus, normal,
+                                                                       case_cfg, e.h_min, face_coords, t)
             else:
                 # interior mortar, neighbor's trace at the SHARED face
                 neighbor      = right if (e is left) else left
@@ -410,8 +420,11 @@ def _compute_gradient_surface_2d(mesh, case_cfg: CaseCfg, t: float = 0.0) -> Non
                     # Dirichlet wall state (q+ = 2 q_w - q-), chosen precisely so the central trace
                     # below lands on q_w EXACTLY -- that is what makes no-slip / isothermal a hard
                     # condition on grad(q) rather than a half-strength one. Every other BC just
-                    # reuses its inviscid ghost.
-                    q_plus = gradient_exterior_state(mort, q_minus, case_cfg, t, normal)
+                    # reuses its inviscid ghost. A prescribed BC additionally needs the face-node
+                    # coordinates so it can evaluate its state function there.
+                    face_coords = (_prolong_metric_to_face_2d(e.quad_node_coords, face_id, I_min, I_max)
+                                   if is_prescribed(mort.boundary_condition) else None)
+                    q_plus = gradient_exterior_state(mort, q_minus, case_cfg, t, normal, face_coords)
             else:
                 neighbor    = right if (e is left) else left
                 nbr_face_id = neighbor.connected_mortars.index(mort) + 1
