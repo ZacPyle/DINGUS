@@ -228,7 +228,75 @@ def _roe_dissipation_euler(q_minus : np.ndarray,
            abs_lam_mid   * (0.5 * a_entropy * q2 + rho * np.sum(vel * dvt, axis=-1)))
 
     return np.concatenate([d_rho[..., None], d_mom, d_E[..., None]], axis=-1)
-        
+
+def characteristic_ghost_state(q_int   : np.ndarray,
+                               q_ext   : np.ndarray,
+                               normal  : np.ndarray,
+                               case_cfg: CaseCfg) -> np.ndarray:
+    '''
+    The CHARACTERISTIC far-field ghost state for the compressible Euler equations:
+
+        q_bc = 1/2 (q_int + q_ext)  +  1/2 sign(A_n) (q_int - q_ext)
+
+    where sign(A_n) = R sign(Lambda) L applies the SIGN of each characteristic speed of the normal
+    flux Jacobian, evaluated at the Roe average of (q_int, q_ext). Per characteristic wave: an OUTGOING
+    one (lambda > 0) is taken from the INTERIOR (it carries information out of the domain), an INCOMING
+    one (lambda < 0) from the EXTERIOR reference (it carries information in). This imposes exactly as
+    many conditions as there are incoming characteristics -> non-reflecting, and it self-selects the
+    count per node/regime (supersonic out -> q_int, supersonic in -> q_ext, subsonic -> a genuine blend).
+
+    This is the SAME Roe-averaged wave decomposition as _roe_dissipation_euler, with sign(lambda) in
+    place of |lambda| (and no entropy fix -- a stationary characteristic, lambda = 0, simply drops out,
+    leaving the average, which is correct). Inputs mirror _roe_dissipation_euler; returns (M, num_eq).
+    '''
+
+    gamma = case_cfg.physics.gamma
+
+    # Interior ("minus") and exterior ("plus") primitive states
+    rho_L = q_int[..., 0]; vel_L = q_int[..., 1:-1] / rho_L[..., None]
+    p_L   = compute_pressure(q_int, case_cfg); H_L = (q_int[..., -1] + p_L) / rho_L
+    rho_R = q_ext[..., 0]; vel_R = q_ext[..., 1:-1] / rho_R[..., None]
+    p_R   = compute_pressure(q_ext, case_cfg); H_R = (q_ext[..., -1] + p_R) / rho_R
+
+    # Roe averages (identical to the Roe flux)
+    sq_L, sq_R = np.sqrt(rho_L), np.sqrt(rho_R)
+    inv_sq = 1.0 / (sq_L + sq_R)
+    rho = sq_L * sq_R
+    vel = (sq_L[..., None] * vel_L + sq_R[..., None] * vel_R) * inv_sq[..., None]
+    H   = (sq_L * H_L + sq_R * H_R) * inv_sq
+    un  = np.sum(vel * normal, axis=-1)
+    q2  = np.sum(vel * vel, axis=-1)
+    c   = np.sqrt((gamma - 1.0) * (H - 0.5 * q2))
+
+    # Jumps q_ext - q_int and the wave strengths (identical to the Roe flux)
+    drho = rho_R - rho_L
+    dp   = p_R - p_L
+    dvel = vel_R - vel_L
+    dun  = np.sum(dvel * normal, axis=-1)
+    dvt  = dvel - dun[..., None] * normal
+    inv_c2 = 1.0 / (c * c)
+    a_ac_minus = 0.5 * (dp - rho * c * dun) * inv_c2
+    a_ac_plus  = 0.5 * (dp + rho * c * dun) * inv_c2
+    a_entropy  = drho - dp * inv_c2
+
+    # SIGN of each characteristic speed (no entropy fix): +1 outgoing, -1 incoming, 0 stationary.
+    s_minus = np.sign(un - c)
+    s_plus  = np.sign(un + c)
+    s_mid   = np.sign(un)
+
+    # D_sign = sign(A_n) (q_ext - q_int), assembled from the same eigenvectors as the Roe dissipation.
+    d_rho = s_minus * a_ac_minus + s_mid * a_entropy + s_plus * a_ac_plus
+    d_mom = ((s_minus * a_ac_minus)[..., None] * (vel - c[..., None] * normal) +
+             (s_plus  * a_ac_plus )[..., None] * (vel + c[..., None] * normal) +
+             s_mid[..., None] * (a_entropy[..., None] * vel + rho[..., None] * dvt))
+    d_E   = (s_minus * a_ac_minus * (H - un * c) +
+             s_plus  * a_ac_plus  * (H + un * c) +
+             s_mid   * (0.5 * a_entropy * q2 + rho * np.sum(vel * dvt, axis=-1)))
+    D_sign = np.concatenate([d_rho[..., None], d_mom, d_E[..., None]], axis=-1)
+
+    # q_bc = 1/2 (q_int + q_ext) - 1/2 sign(A_n)(q_ext - q_int)
+    return 0.5 * (q_int + q_ext) - 0.5 * D_sign
+
 def _roe_dissipation(q_minus : np.ndarray,
                      q_plus  : np.ndarray,
                      normal  : np.ndarray,
@@ -385,9 +453,10 @@ def compute_numerical_flux(q_minus            : np.ndarray,
                            q_plus             : np.ndarray,
                            normal             : np.ndarray,
                            case_cfg           : CaseCfg,
-                           grad_minus         : np.ndarray | None = None,
-                           grad_plus          : np.ndarray | None = None,
-                           viscous_normal_flux: np.ndarray | None = None) -> np.ndarray:
+                           grad_minus          : np.ndarray | None = None,
+                           grad_plus           : np.ndarray | None = None,
+                           viscous_normal_flux : np.ndarray | None = None,
+                           inviscid_normal_flux: np.ndarray | None = None) -> np.ndarray:
 
     '''
     Compute the NUMERICAL (interface) flux at a single face: a single-valued approximation to the 
@@ -427,35 +496,42 @@ def compute_numerical_flux(q_minus            : np.ndarray,
     - viscous_normal_flux     : (..., num_eq) optional OVERRIDE for the viscous normal flux F_visc.n at
                                 this face (NSE only). When given it is used verbatim, in place of the BR1
                                 central average of the two sides. This is how the wall BCs are imposed.
+    - inviscid_normal_flux    : (..., num_eq) optional OVERRIDE for the inviscid (hyperbolic) normal flux
+                                at this face, used verbatim in place of the central + Riemann dissipation.
+                                This is how a CHARACTERISTIC far-field BC imposes F(q_bc).n directly.
 
     Outputs:
     - f_star_n : (..., num_eq) array of numerical fluxes at the face, projected onto the face normal.
     '''
 
-    # --- Hyperbolic half: central average of the INVISCID flux + Riemann dissipation -------------
-    # compute_inviscid_flux returns (M, num_eq, ndim); contracting the ndim axis with `normal` gives F.n.
-    Fn_minus = np.einsum('med,md->me', compute_inviscid_flux(q_minus, case_cfg), normal)   # (M, num_eq)
-    Fn_plus  = np.einsum('med,md->me', compute_inviscid_flux(q_plus , case_cfg), normal)   # (M, num_eq)
-    central  = 0.5 * (Fn_minus + Fn_plus)
+    # --- Hyperbolic half: the caller's override, or central average of the INVISCID flux + Riemann
+    #     dissipation. compute_inviscid_flux returns (M, num_eq, ndim); contracting ndim with `normal`
+    #     gives F.n.
+    if inviscid_normal_flux is not None:
+        f_star = inviscid_normal_flux
+    else:
+        Fn_minus = np.einsum('med,md->me', compute_inviscid_flux(q_minus, case_cfg), normal)   # (M, num_eq)
+        Fn_plus  = np.einsum('med,md->me', compute_inviscid_flux(q_plus , case_cfg), normal)   # (M, num_eq)
+        central  = 0.5 * (Fn_minus + Fn_plus)
 
-    # Compute the dissipation term specific to the chosen Riemann solver
-    match case_cfg.physics.riemann_solver:
-        case 'upwind' | 'LLF':
-            # Scalar (Lax-Friedrichs / Rusanov) dissipation. For linear scalar advection physics models, this
-            # reproduces EXACT upwinding with lam = |a.n|, the formula collapses to
-            #   a.n * (q_minus if a.n >= 0 else q_plus).
-            lam    = _max_abs_face_speed(q_minus, q_plus, normal, case_cfg)   # (M, 1)
-            f_star = central - 0.5 * lam * (q_plus - q_minus)
+        # Compute the dissipation term specific to the chosen Riemann solver
+        match case_cfg.physics.riemann_solver:
+            case 'upwind' | 'LLF':
+                # Scalar (Lax-Friedrichs / Rusanov) dissipation. For linear scalar advection physics models, this
+                # reproduces EXACT upwinding with lam = |a.n|, the formula collapses to
+                #   a.n * (q_minus if a.n >= 0 else q_plus).
+                lam    = _max_abs_face_speed(q_minus, q_plus, normal, case_cfg)   # (M, 1)
+                f_star = central - 0.5 * lam * (q_plus - q_minus)
 
-        case 'roe':
-            # Matrix dissipation; physics-specific (returns the full D.(q_plus - q_minus) already).
-            f_star = central - 0.5 * _roe_dissipation(q_minus, q_plus, normal, case_cfg)
+            case 'roe':
+                # Matrix dissipation; physics-specific (returns the full D.(q_plus - q_minus) already).
+                f_star = central - 0.5 * _roe_dissipation(q_minus, q_plus, normal, case_cfg)
 
-        case _:
-            raise ValueError(
-                f"Unknown Riemann solver: '{case_cfg.physics.riemann_solver}'. "
-                "Expected one of: 'upwind', 'LLF', 'roe'."
-            )
+            case _:
+                raise ValueError(
+                    f"Unknown Riemann solver: '{case_cfg.physics.riemann_solver}'. "
+                    "Expected one of: 'upwind', 'LLF', 'roe'."
+                )
 
     # --- Parabolic half: BR1 central viscous flux, or the caller's wall override ------------------
     if case_cfg.physics.model == 'navier-stokes':

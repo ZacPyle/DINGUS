@@ -8,6 +8,7 @@ from dingus.mesh import mortar_class
 from dingus.physics.constitutiveRelations import compute_temperature
 from dingus.physics.viscousFluxes import compute_heat_flux, compute_viscous_flux
 from dingus.physics.constitutiveRelations import compute_viscosity
+from dingus.physics.fluxes import characteristic_ghost_state, compute_inviscid_flux
 
 '''
 Boundary conditions in a DG scheme are imposed WEAKLY, through the numerical (interface) flux.
@@ -184,10 +185,13 @@ def prescribed_target_state(bc         : BCCfg              ,
     - t           : current time (for unsteady prescribed BCs).
     '''
 
-    if bc.type == 'uniform_inflow':
+    # A constant `state` (uniform_inflow, or a constant-freestream characteristic BC) is broadcast
+    # directly; otherwise the state comes from the user function (prescribed, or a function-valued
+    # characteristic reference).
+    if bc.state is not None:
         return np.ones_like(q_minus) * bc.state
 
-    # prescribed: evaluate the user function at the face-node coordinates.
+    # evaluate the user function at the face-node coordinates.
     if face_coords is None:
         raise ValueError("A 'prescribed' boundary condition needs the face-node coordinates, but "
                          "prescribed_target_state was called without them.")
@@ -360,6 +364,30 @@ def prescribed_viscous_normal_flux(bc         : BCCfg            ,
     return _dirichlet_viscous_normal_flux(target, q_minus, grad_minus, normal, case_cfg, h_elem,
                                           remove_normal_heat=False)
 
+def is_characteristic(bc: BCCfg) -> bool:
+    '''True if this BC is the non-reflecting characteristic far-field condition.'''
+    return bc.type == 'characteristic'
+
+def characteristic_inviscid_normal_flux(bc         : BCCfg            ,
+                                        q_minus    : np.ndarray       ,
+                                        normal     : np.ndarray       ,
+                                        face_coords: np.ndarray | None,
+                                        case_cfg   : CaseCfg          ,
+                                        t          : float=0.0        ) -> np.ndarray:
+    '''
+    The INVISCID normal flux F(q_bc).n at a characteristic far-field boundary, used in place of the
+    Riemann flux. The reference (far-field) state is supplied like a prescribed BC -- a constant
+    `state` or a function -- and blended with the interior into the characteristic ghost q_bc, which
+    respects the wave directions (outgoing from the interior, incoming from the reference). The
+    boundary flux is then the physical inviscid flux evaluated at that ghost, projected onto the normal.
+
+    Doing this explicitly (rather than feeding q_ext to the Riemann solver) makes the non-reflecting
+    selection exact and solver-independent -- it does not rely on the Roe dissipation to upwind.
+    '''
+    q_ref = prescribed_target_state(bc, q_minus, face_coords, case_cfg, t)     # far-field reference
+    q_bc  = characteristic_ghost_state(q_minus, q_ref, normal, case_cfg)       # wave-selected ghost
+    return np.einsum('med,md->me', compute_inviscid_flux(q_bc, case_cfg), normal)
+
 def exterior_state(mort       : mortar_class.SpectralMortar,
                    q_minus    : np.ndarray                 ,
                    case_cfg   : CaseCfg                    ,
@@ -472,5 +500,10 @@ def gradient_exterior_state(mort       : mortar_class.SpectralMortar,
     if is_prescribed(bc):
         target = prescribed_target_state(bc, q_minus, face_coords, case_cfg, t)
         return 2.0 * target - q_minus
+
+    if is_characteristic(bc):
+        # Viscously transparent: extrapolate (q+ = q-), so the central trace has zero jump and the
+        # boundary adds nothing to grad(q). The far-field imposes NO gradient condition.
+        return q_minus.copy()
 
     return exterior_state(mort, q_minus, case_cfg, t, normal, face_coords)

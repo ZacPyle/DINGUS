@@ -199,8 +199,15 @@ class BCCfg(BaseModel):
     #                    uniform_inflow -- both impose a full-state ghost -- only the source of the state
     #                    differs. Correct for MMS and SUPERSONIC inflow; reflective at a subsonic inflow
     #                    (which wants the characteristic 'constant_pressure' treatment instead).
+    #   characteristic : a NON-REFLECTING far-field BC. Supplies a REFERENCE state the same way as
+    #                    `prescribed` (constant `state`, or a `state_file` function), but imposes only
+    #                    its INCOMING-characteristic content per node (outgoing characteristics are
+    #                    extrapolated from the interior). Self-selects the count by flow regime, so one
+    #                    BC serves subsonic/supersonic inflow AND outflow -- the freestream BC for the
+    #                    cylinder/airfoil. Viscously transparent (extrapolated gradient, no penalty).
     type : Literal['uniform_inflow'         ,
                    'prescribed'             ,
+                   'characteristic'         ,
                    'outflow'                ,
                    'periodic'               ,
                    'adiabatic_slip_wall'    ,

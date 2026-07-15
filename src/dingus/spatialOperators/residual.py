@@ -2,9 +2,10 @@
 
 import numpy as np
 from dingus.boundaryConditions.boundaryConditions import (exterior_state, gradient_exterior_state,
-                                                          is_wall, is_prescribed,
+                                                          is_wall, is_prescribed, is_characteristic,
                                                           wall_viscous_normal_flux,
-                                                          prescribed_viscous_normal_flux)
+                                                          prescribed_viscous_normal_flux,
+                                                          characteristic_inviscid_normal_flux)
 from dingus.config import CaseCfg
 from dingus.mesh import mesh_class
 from dingus.physics import fluxes
@@ -293,7 +294,8 @@ def _compute_surface_2d(mesh, case_cfg: CaseCfg, t: float = 0.0) -> None:
             # wall's q_plus is a reflection built for the Riemann solver, not a physical neighbor, so
             # averaging its viscous flux in would be meaningless. Walls hand the numerical flux an
             # explicit viscous flux instead (built from the wall state + the interior gradient).
-            visc_override = None
+            visc_override     = None
+            inviscid_override = None      # set only by a characteristic far-field BC
 
             if None in mort.connected_elements:
                 bc = mort.boundary_condition
@@ -303,27 +305,40 @@ def _compute_surface_2d(mesh, case_cfg: CaseCfg, t: float = 0.0) -> None:
                     q_plus         = _prolong_to_face_2d(partner.solution, pface, I_min, I_max)
                     grad_plus      = _prolong_grad_to_face_2d(partner.grad_q, pface, I_min, I_max) if is_nse else None
                 else:
-                    # boundary mortar, compute the ghost state from the BC dispatch. For a wall this is
-                    # the impermeability reflection (normal momentum flipped, pressure preserved); for a
-                    # prescribed BC it is the imposed state itself. A prescribed BC needs the physical
-                    # coordinates of the face nodes, so prolong them the same way as the solution.
+                    # boundary mortar. Both prescribed and characteristic BCs read the face-node
+                    # coordinates (to evaluate a state function / far-field reference), so prolong them
+                    # the same way as the solution.
                     face_coords = (_prolong_metric_to_face_2d(e.quad_node_coords, face_id, I_min, I_max)
-                                   if is_prescribed(bc) else None)
-                    q_plus    = exterior_state(mort, q_minus, case_cfg, t, normal, face_coords)
-                    grad_plus = grad_minus if is_nse else None
+                                   if (is_prescribed(bc) or is_characteristic(bc)) else None)
 
-                    if is_nse and is_wall(bc):
-                        # The real wall condition: viscous flux from the DIRICHLET wall state and the
-                        # INTERIOR gradient, with the wall-normal heat flux zeroed out if adiabatic,
-                        # PLUS the interior penalty that makes the weak Dirichlet imposition stable
-                        # (e.h_min sets the penalty's length scale).
-                        visc_override = wall_viscous_normal_flux(bc, q_minus, grad_minus, normal,
-                                                                 case_cfg, e.h_min)
-                    elif is_nse and is_prescribed(bc):
-                        # Same story for a prescribed Dirichlet BC: the viscous flux is built from the
-                        # imposed state + interior gradient, plus the stabilizing interior penalty.
-                        visc_override = prescribed_viscous_normal_flux(bc, q_minus, grad_minus, normal,
-                                                                       case_cfg, e.h_min, face_coords, t)
+                    if is_characteristic(bc):
+                        # NON-REFLECTING far-field: the inviscid flux is F(q_bc).n for the characteristic
+                        # ghost (outgoing waves from the interior, incoming from the far-field reference),
+                        # imposed directly. The BC is viscously TRANSPARENT: extrapolate the state and the
+                        # gradient (q_plus = q_minus, grad_plus = grad_minus) so the viscous flux is just
+                        # the interior one -- NO Dirichlet target, NO penalty.
+                        inviscid_override = characteristic_inviscid_normal_flux(bc, q_minus, normal,
+                                                                               face_coords, case_cfg, t)
+                        q_plus    = q_minus
+                        grad_plus = grad_minus if is_nse else None
+                    else:
+                        # For a wall this is the impermeability reflection; for a prescribed BC it is the
+                        # imposed state itself.
+                        q_plus    = exterior_state(mort, q_minus, case_cfg, t, normal, face_coords)
+                        grad_plus = grad_minus if is_nse else None
+
+                        if is_nse and is_wall(bc):
+                            # The real wall condition: viscous flux from the DIRICHLET wall state and the
+                            # INTERIOR gradient, with the wall-normal heat flux zeroed out if adiabatic,
+                            # PLUS the interior penalty that makes the weak Dirichlet imposition stable
+                            # (e.h_min sets the penalty's length scale).
+                            visc_override = wall_viscous_normal_flux(bc, q_minus, grad_minus, normal,
+                                                                     case_cfg, e.h_min)
+                        elif is_nse and is_prescribed(bc):
+                            # Same story for a prescribed Dirichlet BC: the viscous flux is built from the
+                            # imposed state + interior gradient, plus the stabilizing interior penalty.
+                            visc_override = prescribed_viscous_normal_flux(bc, q_minus, grad_minus, normal,
+                                                                           case_cfg, e.h_min, face_coords, t)
             else:
                 # interior mortar, neighbor's trace at the SHARED face
                 neighbor      = right if (e is left) else left
@@ -336,7 +351,8 @@ def _compute_surface_2d(mesh, case_cfg: CaseCfg, t: float = 0.0) -> None:
 
             # Compute the strong-form correction with the numerical and interior normal flux (physical)
             f_star     = fluxes.compute_numerical_flux(q_minus, q_plus, normal, case_cfg,
-                                                       grad_minus, grad_plus, visc_override)   # (P+1, num_eq)
+                                                       grad_minus, grad_plus, visc_override,
+                                                       inviscid_override)   # (P+1, num_eq)
             f_interior = np.einsum('med,md->me',
                                    fluxes.compute_volume_flux(q_minus, case_cfg, grad_minus), normal)   # (P+1, num_eq)
 

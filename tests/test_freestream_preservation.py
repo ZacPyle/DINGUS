@@ -37,7 +37,7 @@ pytestmark = [pytest.mark.numerics, pytest.mark.slow]
 
 # Borrows the Taylor-Green case directory purely as a convenient, validated 2D Navier-Stokes
 # configuration (mesh + physics). Nothing about this test is Taylor-Green specific.
-CASE_DIR  = Path(__file__).resolve().parent.parent / "test_case_taylor_green_vortex"
+CASE_DIR  = Path(__file__).resolve().parent / "test_case_taylor_green_vortex"
 CTRL_FILE = CASE_DIR / "control.yaml"
 
 
