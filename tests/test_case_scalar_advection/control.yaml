@@ -14,7 +14,7 @@ physics:
 # Specify the mesh-specific parameters.
 mesh:
   mesh_format: "HOHQMesh"           # Format the mesh file is written in
-  mesh_file  : "./inputs/Square.mesh"  # Mesh file name (including the path if not in the same directory as this input file)
+  mesh_file  : "./inputs/SquareSMALL.mesh"  # Mesh file name (including the path if not in the same directory as this input file)
   #mesh_file  : "./inputs/SingleElement.mesh"  # Mesh file name (including the path if not in the same directory as this input file)
   ndim       : 2                    # Spatial dimensionality of the problem (1, 2, or 3)
   poly_deg   : 8                    # Polynomial degree for solution approximation within each element

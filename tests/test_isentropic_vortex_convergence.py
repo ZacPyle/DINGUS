@@ -1,4 +1,4 @@
-# tests/test_isentropic_vortex_convergenceFAST.py
+# tests/test_isentropic_vortex_convergence.py
 '''
 Accuracy test driven by the tests/test_case_isentropic_vortex/ case directory. It loads that case's
 control.yaml, mesh, and initial_condition_vortex.py, and sweeps ONLY the polynomial degree.
@@ -8,18 +8,20 @@ the freestream velocity (U_INF, V_INF) without changing shape. The exact solutio
 is therefore the initial vortex translated by (U_INF*T, V_INF*T) (with periodic wrap). The L2
 error between the computed and exact fields -- summed over ALL conserved variables -- is a pure
 accuracy measure, and for a high-order DG method on this smooth field it falls SPECTRALLY
-(exponentially) with poly_deg.
+(exponentially) with poly_deg, all the way to the round-off floor (~1e-13) by degree ~16.
 
-This is the Euler analogue of test_advection_scalar_convergenceFAST.py. The scalar test's
+This is the Euler analogue of test_scalar_advection_convergence.py. The scalar test's
 "exact == initial after a whole-domain round trip" is just the special case where the
 translation happens to be a whole number of domain lengths; here we compare against the
 analytically translated solution so the test stays fast (short final_time) on the larger
 [0,10]^2 domain.
 
-NOTE on the error floor: the analytic vortex is only exactly periodic once its swirl has decayed
-to the freestream at the boundaries. On [0,10]^2 with R=1, beta=5 the boundary perturbation is
-~1e-5, which caps how far the error can fall. To push convergence further (the full "hockey
-stick"), enlarge the domain (and add elements) so the vortex decays more before the boundary.
+WHY THERE IS NO ~1e-5 "boundary floor" (a correction to an earlier note): one might expect the
+vortex's tails wrapping around the periodic boundary to cap the error, since the free-space vortex
+is not EXACTLY periodic on a finite box. But the error here is measured against the analytically
+TRANSLATED vortex, not against the initial field under an assumed-exact periodicity -- so that
+mismatch is not part of the error being measured, and the curve converges cleanly to round-off.
+(The measured floor is ~1e-13 at degree ~16, confirmed by the saved convergence plot.)
 
 Produces a table in the terminal (use `pytest -s`) and a semilog convergence plot in
 tests/test_case_isentropic_vortex/outputs/figures/.
@@ -170,49 +172,37 @@ def _run_sweep(degrees: list):
     fig_path = _plot_convergence(degrees, errors, slope)
     Console().print(f"  convergence plot saved to: [green]{fig_path}[/green]")
 
-    # 1. finite
+    # 1. finite, and decreasing with poly_deg UNTIL the round-off floor. Above the floor we do NOT
+    #    require STRICT monotonicity: an even/odd node-sampling wiggle can survive (LG nodes place a
+    #    point on the vortex peak for even poly_deg only), and near the floor higher degrees carry
+    #    slightly more accumulated round-off. The overall-reduction and slope checks below catch real
+    #    regressions; benign parity/floor wiggles are not flagged.
     assert all(np.isfinite(errors)), f"non-finite error in {errors}"
 
-    # 2. net accuracy gain across the sweep. We deliberately do NOT require STRICT monotonicity: a
-    #    residual even/odd node-sampling wiggle can survive even with the vortex at an element center
-    #    (LG nodes place a point on the vortex peak for even poly_deg only). A broken flux or wave
-    #    speed would fail the overall-reduction and slope checks below, so real regressions are still
-    #    caught; benign parity wiggles are not.
-    assert errors[-1] < 0.2 * errors[0], \
+    # 2. it converges DEEP -- all the way to round-off (there is no ~1e-5 boundary floor; see the module
+    #    docstring). Reaching < 1e-9 is the real proof the spatial operator is high-order; a broken flux
+    #    or wave speed would stall far above that.
+    assert min(errors) < 1e-9, \
+        f"vortex error never reached the round-off regime (min {min(errors):.2e}); expected ~1e-13"
+    assert errors[-1] < errors[0] / 1e5, \
         f"insufficient overall error reduction across the poly_deg sweep: {errors}"
 
-    # 3. spectral-ish average decay rate (gentler than the scalar test's -0.6: the ~1e-5 boundary
-    #    floor and the short final_time soften the achievable rate on this domain).
-    assert slope < -0.3, f"convergence slope {slope:.3f}/degree is not decaying fast enough"
-
-    # 4. sanity: the finest resolution is already quite accurate
-    assert errors[-1] < 1e-2, f"finest-degree error {errors[-1]:.2e} unexpectedly large"
+    # 3. spectral decay. The least-squares fit over the whole sweep includes the flat round-off tail,
+    #    which softens it to ~-0.67/degree; -0.5 cleanly separates that from a non-converging floor.
+    assert slope < -0.5, f"convergence slope {slope:.3f}/degree is not spectral"
 
 
 @pytest.mark.numerics
-@pytest.mark.slow              # convects the vortex to final_time at each degree -> time-marching, ~1 min
+@pytest.mark.slow              # convects the vortex to final_time at each degree -> time-marching
 @pytest.mark.filterwarnings("ignore::UserWarning")
 def test_isentropic_vortex_spectral_convergence():
     '''
-    Vortex convection L2 error must fall (near-)spectrally with poly_deg on the smooth field.
+    Vortex convection L2 error must fall spectrally with poly_deg on the smooth field, all the way to the
+    round-off floor (~1e-13 by degree ~16 -- see the saved plot). Swept deep on purpose: the value of a
+    convergence test is watching the error descend many orders of magnitude in a straight line on the
+    semilog plot, which is only visible once you go past the degrees where it is still O(1e-3).
 
-    SHALLOW sweep: enough degrees to establish the exponential trend and catch a broken flux or wave
-    speed. Still `slow` -- even four degrees each convect the vortex through many RK4 steps. The deep
-    sweep below is the same measurement carried far enough to actually SEE the hockey stick.
-    (The FAST numerics coverage of spectral convergence lives in the Couette/Poiseuille steady-RESIDUAL
-    tests, which need no time-marching at all.)
-    '''
-    _run_sweep([2, 3, 4, 5])
-
-
-@pytest.mark.numerics
-@pytest.mark.slow
-@pytest.mark.filterwarnings("ignore::UserWarning")
-def test_isentropic_vortex_spectral_convergence_deep():
-    '''
-    The same convergence measurement, swept far enough to resolve the full spectral curve -- and to hit
-    the ~1e-5 error FLOOR set by the analytic vortex not being exactly periodic on [0,10]^2 (see the
-    module docstring). Worth watching: the curve should bend over onto that floor, not keep falling, and
-    not turn back UP (which would mean the high-degree runs are going unstable).
+    (The FAST numerics coverage of spectral convergence -- with no time-marching -- lives in the viscous
+    MMS test and the Couette/Poiseuille steady-RESIDUAL tests; this one convects the vortex, so it is slow.)
     '''
     _run_sweep([2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18])

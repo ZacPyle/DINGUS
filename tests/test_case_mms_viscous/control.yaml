@@ -1,0 +1,50 @@
+# Method of Manufactured Solutions (MMS) for the Navier-Stokes VISCOUS terms.
+# The manufactured solution + its source term both live in inputs/mms_manufactured.py (sympy-derived).
+# This is a rigorous order-of-accuracy check for the viscous discretization -- see that file's header.
+name: "test_case_mms_viscous"
+
+physics:
+  model          : "navier-stokes"
+  gamma          : 1.4
+  Re             : 10                # Moderate on purpose: makes the viscous flux ~10% of the inviscid,
+                                     # so a viscous-source error floors the residual at ~1e-1 -- glaringly
+                                     # above the ~1e-9 spectral floor. (MMS has no physical Re; any works.)
+  Pr             : 0.71
+  mach_ref       : 1.0
+  riemann_solver : "roe"             # Interface dissipation ~ 0 here anyway: the manufactured solution is
+                                     # continuous, so q_minus == q_plus at every interior face.
+
+mesh:
+  mesh_format: "HOHQMesh"
+  mesh_file  : "./inputs/Square.mesh"  # periodic unit square. p-refinement test -> a COARSE mesh (2x2)
+                                       # is ideal (cheaper + a cleaner spectral curve); swap it in freely.
+  ndim       : 2
+  poly_deg   : 4                     # the test sweeps this; the value here is just a default.
+  quad_type  : "LG"
+
+time_stepping:                       # The test is RESIDUAL-based (no time-marching), so these are unused;
+  time_integrator : "rk4"            # they are here only to satisfy the config schema.
+  cfl             : 0.5
+  start_time      : 0.0
+  final_time      : 1.0
+
+initialization:
+  IC_method : "analytical"
+  IC_file   : "./inputs/mms_manufactured.py"   # provides initial_condition() = q_exact
+
+source:
+  source_method : "analytical"
+  source_file   : "./inputs/mms_manufactured.py"   # provides source_term() = div(F(q_exact))
+
+io:
+  output_dir      : './outputs/'
+  output_format   : 'vtk'
+  output_interval : 0.5
+
+# Fully periodic: the manufactured solution is periodic on [0,1]^2, so NO boundary condition is
+# exercised. This test isolates the INTERIOR operator; a Dirichlet-MMS test will cover boundaries later.
+boundary_conditions:
+  Bottom : {type: periodic, partner: Top   }
+  Right  : {type: periodic, partner: Left  }
+  Top    : {type: periodic, partner: Bottom}
+  Left   : {type: periodic, partner: Right }

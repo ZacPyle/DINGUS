@@ -157,21 +157,6 @@ def _run_sweep(degrees: list, cfl: float | None = None):
     # 3. sanity: the finest resolution is already quite accurate
     assert errors[-1] < 1e-2, f"finest-degree error {errors[-1]:.2e} unexpectedly large"
 
-
-@pytest.mark.numerics
-@pytest.mark.slow              # advects one full period at each degree -> time-marching, ~15 s
-@pytest.mark.filterwarnings("ignore::UserWarning")
-def test_scalar_advection_spectral_convergence():
-    '''
-    Periodic round-trip L2 error must fall spectrally (exponentially) with poly_deg.
-
-    SHALLOW sweep: enough to establish the exponential trend and catch a broken flux. Still `slow` --
-    each degree advects the bump a full period through many RK4 steps. The deep sweep below carries the
-    same measurement to machine precision.
-    '''
-    _run_sweep([2, 3, 4, 5])
-
-
 @pytest.mark.numerics
 @pytest.mark.slow
 @pytest.mark.filterwarnings("ignore::UserWarning")
@@ -186,4 +171,4 @@ def test_scalar_advection_spectral_convergence_deep():
     indistinguishable, from the outside, from a spatial scheme that stopped converging. Shrinking dt
     pushes that floor down so the spatial convergence stays the thing being measured.
     '''
-    _run_sweep([2, 3, 4, 6, 8, 10, 12], cfl=0.05)
+    _run_sweep([2, 3, 4, 6, 8, 10, 12, 14, 16], cfl=0.05)

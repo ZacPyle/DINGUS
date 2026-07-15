@@ -57,6 +57,10 @@ def _build_mesh(poly_deg: int):
     '''Load the periodic scalar-advection case, override poly_deg, and construct the mesh.'''
     cfg = load_case_yaml(CTRL_FILE)
     cfg.mesh.poly_deg = poly_deg
+    # This gradient-accuracy test OWNS its mesh: it needs the finer 5x5 Square mesh to reach ~1e-6 by the
+    # top swept degree. A coarse 2x2 converges ~2x slower per degree and would miss that threshold. The
+    # gradient pass does no time-marching, so a coarser mesh buys no speed. control.yaml's mesh is free.
+    cfg.mesh.mesh_file = "./inputs/Square.mesh"
     mesh = mesh_class.Mesh()
     mesh.read_mesh(CASE_DIR / cfg.mesh.mesh_file)
     mesh.construct_mesh(cfg)
