@@ -232,6 +232,10 @@ class Mesh:
             # side to ensure consistent interpolation between elements. See ISM-V2 docs for details.
             mort.connected_elements = [self.elements[el_id_left-1]  if el_id_left  != 0 else None,
                                        self.elements[el_id_right-1] if el_id_right != 0 else None]
+
+            # A negative right-element side index means the two elements order the shared-edge nodes in
+            # OPPOSITE directions. Record it so the surface terms flip the neighbor's face trace.
+            mort.orientation_reversed = (el_face_right < 0)
             
             # Link the mortar to the elements
             if el_id_left != 0:

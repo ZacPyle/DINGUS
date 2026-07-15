@@ -284,10 +284,19 @@ def _compute_surface_2d(mesh, case_cfg: CaseCfg, t: float = 0.0) -> None:
             q_minus    = _prolong_to_face_2d(e.solution, face_id, I_min, I_max)   # (P+1, num_eq)
             grad_minus = _prolong_grad_to_face_2d(e.grad_q, face_id, I_min, I_max) if is_nse else None
 
-            # Grab the outward normal for THIS element (stored normal is outward-from-left owner)
             left, right = mort.connected_elements
-            owner  = left if left is not None else right       # matches _get_mortar_owner
-            normal = mort.normal_vector if (e is owner) else -mort.normal_vector   # (P+1, 2)
+
+            # Outward normal + surface scale for THIS element, in THIS element's face-node order.
+            # Computed from e's OWN face metric (J a^i) so they line up node-for-node with q_minus /
+            # grad_minus (also from e). This is the general-mesh-safe choice: the stored
+            # mort.normal_vector is in the OWNER's (=left) node order, which is mis-ordered for the
+            # non-owner element on a FLIPPED (orientation-reversed) mortar. For axis-aligned meshes the
+            # two orders coincide, so this reproduces the old result exactly.
+            Ja      = e.jacobian_det[..., None] * (e.contravar_xi if _FACE_2D[face_id]['axis'] == 0
+                                                   else e.contravar_eta)                        # (P+1,P+1,2)
+            Ja_face = _prolong_metric_to_face_2d(Ja, face_id, I_min, I_max)                     # (P+1, 2)
+            S       = np.linalg.norm(Ja_face, axis=-1)                                          # (P+1,)
+            normal  = e.face_sign_map[face_id - 1] * Ja_face / S[:, None]                       # (P+1, 2) outward
 
             # Get or compute the exterior trace: q_plus. `visc_override` stays None everywhere except
             # at a WALL, where the BR1 central average of the viscous flux is not what we want: the
@@ -345,9 +354,17 @@ def _compute_surface_2d(mesh, case_cfg: CaseCfg, t: float = 0.0) -> None:
                 nbr_face_id   = neighbor.connected_mortars.index(mort) + 1
                 q_plus        = _prolong_to_face_2d(neighbor.solution, nbr_face_id, I_min, I_max)
                 grad_plus     = _prolong_grad_to_face_2d(neighbor.grad_q, nbr_face_id, I_min, I_max) if is_nse else None
-                # NOTE: for this axis-aligned Square, the two elements order the shared face nodes
-                # identically, so no flip is needed. A general/curved mesh may require reversing
-                # q_plus (and the metric) to match node ordering -- assert/flag when you get there.
+
+                # FACE-NODE FLIP: on an orientation-reversed mortar the two elements traverse the shared
+                # face in OPPOSITE node order, so the neighbor's trace is reversed relative to q_minus.
+                # Flip it (and grad_plus) back so it lines up node-for-node. Axis-aligned meshes have no
+                # reversed mortars, so this is a no-op there; a general/curved mesh (e.g. the cylinder)
+                # does. The normal is already in e's order (computed from e's metric above), so it needs
+                # no flip.
+                if mort.orientation_reversed:
+                    q_plus = q_plus[::-1]
+                    if grad_plus is not None:
+                        grad_plus = grad_plus[::-1]
 
             # Compute the strong-form correction with the numerical and interior normal flux (physical)
             f_star     = fluxes.compute_numerical_flux(q_minus, q_plus, normal, case_cfg,
@@ -356,11 +373,7 @@ def _compute_surface_2d(mesh, case_cfg: CaseCfg, t: float = 0.0) -> None:
             f_interior = np.einsum('med,md->me',
                                    fluxes.compute_volume_flux(q_minus, case_cfg, grad_minus), normal)   # (P+1, num_eq)
 
-            # surface scale S = |J a^i| at the face: prolong the metric vector and take its norm.
-            Ja  = e.jacobian_det[..., None] * (e.contravar_xi if _FACE_2D[face_id]['axis'] == 0
-                                               else e.contravar_eta)                              # (P+1,P+1,2)
-            S   = np.linalg.norm(_prolong_metric_to_face_2d(Ja, face_id, I_min, I_max), axis=-1)  # (P+1,)
-
+            # S (surface scale = |J a^i| at the face) was computed with the normal above.
             corr = S[:, None] * (f_star - f_interior)          # (P+1, num_eq) contravariant correction
 
             # Lift the correction into the element's residual (strong form: ADD) ---
@@ -421,10 +434,15 @@ def _compute_gradient_surface_2d(mesh, case_cfg: CaseCfg, t: float = 0.0) -> Non
             # Interior trace of THIS element at the face
             q_minus = _prolong_to_face_2d(e.solution, face_id, I_min, I_max)   # (P+1, num_eq)
 
-            # Outward normal for THIS element (stored normal is outward-from-owner)
             left, right = mort.connected_elements
-            owner  = left if left is not None else right
-            normal = mort.normal_vector if (e is owner) else -mort.normal_vector   # (P+1, 2)
+
+            # Outward metric normal (J a^i) and unit normal for THIS element, in e's face-node order
+            # (from e's own metric -- general-mesh-safe, see _compute_surface_2d for the reasoning).
+            Ja            = e.jacobian_det[..., None] * (e.contravar_xi if _FACE_2D[face_id]['axis'] == 0
+                                                        else e.contravar_eta)                   # (P+1,P+1,2)
+            Ja_face       = _prolong_metric_to_face_2d(Ja, face_id, I_min, I_max)               # (P+1, 2)
+            metric_normal = e.face_sign_map[face_id - 1] * Ja_face                              # (P+1, 2) = S*n
+            normal        = metric_normal / np.linalg.norm(Ja_face, axis=-1)[:, None]           # (P+1, 2) unit
 
             # Exterior trace q_plus -- IDENTICAL selection logic to _compute_surface_2d
             if None in mort.connected_elements:
@@ -445,17 +463,15 @@ def _compute_gradient_surface_2d(mesh, case_cfg: CaseCfg, t: float = 0.0) -> Non
                 neighbor    = right if (e is left) else left
                 nbr_face_id = neighbor.connected_mortars.index(mort) + 1
                 q_plus      = _prolong_to_face_2d(neighbor.solution, nbr_face_id, I_min, I_max)
+                # Face-node flip on an orientation-reversed mortar (see _compute_surface_2d).
+                if mort.orientation_reversed:
+                    q_plus = q_plus[::-1]
 
             # Central numerical trace and its jump from the interior value
             q_star = 0.5 * (q_minus + q_plus)             # (P+1, num_eq)
             dq     = q_star - q_minus                     # = 1/2 (q_plus - q_minus)
 
-            # Metric normal at the face: S * n = |J a^i| * (unit normal) = the (J a^i) vector.
-            Ja  = e.jacobian_det[..., None] * (e.contravar_xi if _FACE_2D[face_id]['axis'] == 0
-                                               else e.contravar_eta)                              # (P+1,P+1,2)
-            S   = np.linalg.norm(_prolong_metric_to_face_2d(Ja, face_id, I_min, I_max), axis=-1)  # (P+1,)
-            metric_normal = S[:, None] * normal            # (P+1, 2)  = (J a^i) at the face
-
+            # metric_normal (= S * n = the outward (J a^i) vector) was computed with the normal above.
             # Per-direction correction: (q* - q-)_e * (metric normal)_d  ->  (P+1, num_eq, ndim)
             corr = dq[..., None] * metric_normal[:, None, :]
 

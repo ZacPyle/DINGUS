@@ -36,6 +36,12 @@ class SpectralMortar:
         self.connected_elements : List[Optional['SpectralElement']] = [None, None]
         self.connected_elements_face_sign_map                       = np.array([])
 
+        # True if the two elements traverse this shared edge in OPPOSITE node order (ISM-V2 encodes this
+        # as a NEGATIVE right-element side index). The surface terms then flip the neighbor's face trace
+        # so it lines up with the local trace. Axis-aligned meshes are never reversed; general/curved
+        # meshes (e.g. a cylinder) are.
+        self.orientation_reversed = False
+
         # Curvature information
         self.mortar_curvature  = None
 
